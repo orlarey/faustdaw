@@ -1,0 +1,34 @@
+{
+  "name": "faustdaw",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/**/*.test.js",
+    "serve": "python3 -m http.server 4183",
+    "bench": "npm run build && node scripts/bench.mjs",
+    "bench:browser": "npm run build && playwright test -c playwright.bench.config.ts",
+    "bench:browser:compare": "npm run build && playwright test benchmarks/pan.compare.spec.ts -c playwright.bench.config.ts"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.1",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/lint": "^6.9.5",
+    "@codemirror/search": "^6.6.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.41.0",
+    "@lezer/highlight": "^1.2.3",
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^20.19.39",
+    "esbuild": "^0.28.0",
+    "typescript": "5.6"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "faust-orbit-ui": "^0.4.1"
+  }
+}

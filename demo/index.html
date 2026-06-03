@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebDAW Multitrack Mockup</title>
+    <link rel="stylesheet" href="./styles.css?v=prototype-surface-3" />
+    <link rel="stylesheet" href="./vendor/faust-orbit-ui/faust-orbit-ui.css" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" />
+  </head>
+  <body data-app-ready="false">
+    <main class="app-shell">
+      <section class="workspace">
+        <article class="stage-shell">
+          <div class="stage-header">
+            <div class="stage-header-center">
+              <form id="cursor-form" class="session-transport">
+                <button id="transport-return" type="button" class="transport transport-return">|&lt;</button>
+                <button id="play" type="button" class="transport transport-play transport-toggle" aria-pressed="false">Play</button>
+                <input
+                  id="cursor-time"
+                  name="cursor"
+                  class="session-timecode-input"
+                  type="text"
+                  value="00:00:00.000"
+                  inputmode="numeric"
+                  spellcheck="false"
+                  aria-label="Cursor position"
+                />
+              </form>
+            </div>
+            <div class="stage-session-bar">
+              <button
+                id="session-drag-handle"
+                type="button"
+                class="session-drag-handle"
+                draggable="true"
+                aria-label="Drag current session as audio"
+                title="Drag current session as audio"
+              >◎</button>
+              <div id="session-combo" class="session-combo">
+                <input
+                  id="session-name-input"
+                  class="session-combo-input"
+                  type="text"
+                  value="Untitled Session"
+                  maxlength="80"
+                  spellcheck="false"
+                  aria-label="Current session name"
+                />
+                <button
+                  id="session-menu-button"
+                  type="button"
+                  class="session-combo-toggle"
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                  aria-controls="session-menu"
+                  aria-label="Open session menu"
+                >⌄</button>
+                <div id="session-menu" class="session-combo-menu" hidden role="listbox" aria-label="Sessions"></div>
+              </div>
+            </div>
+            <div class="stage-session-actions">
+              <input id="load-session-input" type="file" accept=".zip,application/zip" hidden />
+              <button id="save-session" type="button" class="transport transport-export transport-compact">Save</button>
+              <button id="load-session" type="button" class="transport transport-export transport-compact">Load</button>
+              <button id="delete-session" type="button" class="transport transport-export transport-compact transport-delete">Close</button>
+              <button id="export-mixdown" type="button" class="transport transport-export transport-compact">Export WAV</button>
+              <div class="shortcuts-popover">
+                <button
+                  id="shortcuts-button"
+                  type="button"
+                  class="transport transport-help transport-compact"
+                  aria-haspopup="dialog"
+                  aria-expanded="false"
+                  aria-controls="shortcuts-panel"
+                >?</button>
+                <section id="shortcuts-panel" class="shortcuts-panel" hidden aria-label="Keyboard shortcuts">
+                  <ul class="shortcuts-list">
+                    <li><span class="shortcuts-key">Drop file</span><span class="shortcuts-label">Import audio</span></li>
+                    <li><span class="shortcuts-key">Shift+Click</span><span class="shortcuts-label">Toggle select</span></li>
+                    <li><span class="shortcuts-key">Option+Drag</span><span class="shortcuts-label">Duplicate</span></li>
+                    <li><span class="shortcuts-key">Del</span><span class="shortcuts-label">Delete</span></li>
+                    <li><span class="shortcuts-key">Drag playhead</span><span class="shortcuts-label">Locate</span></li>
+                    <li><span class="shortcuts-key">Home</span><span class="shortcuts-label">Back to zero</span></li>
+                    <li><span class="shortcuts-key">Return</span><span class="shortcuts-label">Back to last play</span></li>
+                    <li><span class="shortcuts-key">Shift+Click ruler</span><span class="shortcuts-label">Seek</span></li>
+                    <li><span class="shortcuts-key">Space</span><span class="shortcuts-label">Play / Stop</span></li>
+                    <li><span class="shortcuts-key">Drag ruler</span><span class="shortcuts-label">Pan / Zoom</span></li>
+                    <li><span class="shortcuts-key">Cmd/Ctrl+Z</span><span class="shortcuts-label">Undo</span></li>
+                    <li><span class="shortcuts-key">Shift+Cmd/Ctrl+Z</span><span class="shortcuts-label">Redo</span></li>
+                    <li><span class="shortcuts-key">Ctrl+Y</span><span class="shortcuts-label">Redo</span></li>
+                  </ul>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-board">
+            <canvas class="timeline-shared-grid" id="timeline-shared-grid"></canvas>
+            <div id="marker-layer" class="marker-layer"></div>
+            <div class="timeline-ruler">
+              <div class="timeline-ruler-spacer"></div>
+              <div class="timeline-ruler-scale" id="timeline-ruler">
+                <div id="timeline-ruler-negative-overlay" class="timeline-negative-overlay timeline-negative-overlay-ruler"></div>
+                <div id="timeline-ruler-labels" class="timeline-ruler-labels"></div>
+              </div>
+              <div class="timeline-ruler-master-spacer"></div>
+            </div>
+            <div class="timeline-lane">
+              <div class="track-strips">
+                <aside class="track-strip" data-track-id="track-1">
+                  <span class="track-badge">01</span>
+                  <button type="button" class="track-fx-button" data-track-id="track-1" aria-pressed="false">FX</button>
+                  <div class="track-controls">
+                    <div class="track-toggle-stack">
+                      <button type="button" class="track-toggle-button track-mute-button" data-track-id="track-1" aria-pressed="false">M</button>
+                      <button type="button" class="track-toggle-button track-solo-button" data-track-id="track-1" aria-pressed="false">S</button>
+                    </div>
+                    <label class="track-slider track-pan">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <input class="track-pan-slider vertical-slider" data-track-id="track-1" type="range" min="-100" max="100" value="0" />
+                      <output class="track-pan-value track-slider-overlay" data-track-id="track-1">PAN C</output>
+                    </label>
+                    <label class="track-slider track-volume">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <span class="track-slider-fill" aria-hidden="true"></span>
+                      <input class="track-volume-slider vertical-slider" data-track-id="track-1" type="range" min="0" max="100" step="any" value="70.7945784384138" />
+                      <output class="track-volume-value track-slider-overlay" data-track-id="track-1">GAIN 0 dB</output>
+                    </label>
+                  </div>
+                </aside>
+                <aside class="track-strip" data-track-id="track-2">
+                  <span class="track-badge">02</span>
+                  <button type="button" class="track-fx-button" data-track-id="track-2" aria-pressed="false">FX</button>
+                  <div class="track-controls">
+                    <div class="track-toggle-stack">
+                      <button type="button" class="track-toggle-button track-mute-button" data-track-id="track-2" aria-pressed="false">M</button>
+                      <button type="button" class="track-toggle-button track-solo-button" data-track-id="track-2" aria-pressed="false">S</button>
+                    </div>
+                    <label class="track-slider track-pan">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <input class="track-pan-slider vertical-slider" data-track-id="track-2" type="range" min="-100" max="100" value="0" />
+                      <output class="track-pan-value track-slider-overlay" data-track-id="track-2">PAN C</output>
+                    </label>
+                    <label class="track-slider track-volume">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <span class="track-slider-fill" aria-hidden="true"></span>
+                      <input class="track-volume-slider vertical-slider" data-track-id="track-2" type="range" min="0" max="100" step="any" value="70.7945784384138" />
+                      <output class="track-volume-value track-slider-overlay" data-track-id="track-2">GAIN 0 dB</output>
+                    </label>
+                  </div>
+                </aside>
+                <aside class="track-strip" data-track-id="track-3">
+                  <span class="track-badge">03</span>
+                  <button type="button" class="track-fx-button" data-track-id="track-3" aria-pressed="false">FX</button>
+                  <div class="track-controls">
+                    <div class="track-toggle-stack">
+                      <button type="button" class="track-toggle-button track-mute-button" data-track-id="track-3" aria-pressed="false">M</button>
+                      <button type="button" class="track-toggle-button track-solo-button" data-track-id="track-3" aria-pressed="false">S</button>
+                    </div>
+                    <label class="track-slider track-pan">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <input class="track-pan-slider vertical-slider" data-track-id="track-3" type="range" min="-100" max="100" value="0" />
+                      <output class="track-pan-value track-slider-overlay" data-track-id="track-3">PAN C</output>
+                    </label>
+                    <label class="track-slider track-volume">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <span class="track-slider-fill" aria-hidden="true"></span>
+                      <input class="track-volume-slider vertical-slider" data-track-id="track-3" type="range" min="0" max="100" step="any" value="70.7945784384138" />
+                      <output class="track-volume-value track-slider-overlay" data-track-id="track-3">GAIN 0 dB</output>
+                    </label>
+                  </div>
+                </aside>
+                <aside class="track-strip" data-track-id="track-4">
+                  <span class="track-badge">04</span>
+                  <button type="button" class="track-fx-button" data-track-id="track-4" aria-pressed="false">FX</button>
+                  <div class="track-controls">
+                    <div class="track-toggle-stack">
+                      <button type="button" class="track-toggle-button track-mute-button" data-track-id="track-4" aria-pressed="false">M</button>
+                      <button type="button" class="track-toggle-button track-solo-button" data-track-id="track-4" aria-pressed="false">S</button>
+                    </div>
+                    <label class="track-slider track-pan">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <input class="track-pan-slider vertical-slider" data-track-id="track-4" type="range" min="-100" max="100" value="0" />
+                      <output class="track-pan-value track-slider-overlay" data-track-id="track-4">PAN C</output>
+                    </label>
+                    <label class="track-slider track-volume">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <span class="track-slider-fill" aria-hidden="true"></span>
+                      <input class="track-volume-slider vertical-slider" data-track-id="track-4" type="range" min="0" max="100" step="any" value="70.7945784384138" />
+                      <output class="track-volume-value track-slider-overlay" data-track-id="track-4">GAIN 0 dB</output>
+                    </label>
+                  </div>
+                </aside>
+                <aside class="track-strip" data-track-id="track-5">
+                  <span class="track-badge">05</span>
+                  <button type="button" class="track-fx-button" data-track-id="track-5" aria-pressed="false">FX</button>
+                  <div class="track-controls">
+                    <div class="track-toggle-stack">
+                      <button type="button" class="track-toggle-button track-mute-button" data-track-id="track-5" aria-pressed="false">M</button>
+                      <button type="button" class="track-toggle-button track-solo-button" data-track-id="track-5" aria-pressed="false">S</button>
+                    </div>
+                    <label class="track-slider track-pan">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <input class="track-pan-slider vertical-slider" data-track-id="track-5" type="range" min="-100" max="100" value="0" />
+                      <output class="track-pan-value track-slider-overlay" data-track-id="track-5">PAN C</output>
+                    </label>
+                    <label class="track-slider track-volume">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <span class="track-slider-fill" aria-hidden="true"></span>
+                      <input class="track-volume-slider vertical-slider" data-track-id="track-5" type="range" min="0" max="100" step="any" value="70.7945784384138" />
+                      <output class="track-volume-value track-slider-overlay" data-track-id="track-5">GAIN 0 dB</output>
+                    </label>
+                  </div>
+                </aside>
+                <aside class="track-strip" data-track-id="track-6">
+                  <span class="track-badge">06</span>
+                  <button type="button" class="track-fx-button" data-track-id="track-6" aria-pressed="false">FX</button>
+                  <div class="track-controls">
+                    <div class="track-toggle-stack">
+                      <button type="button" class="track-toggle-button track-mute-button" data-track-id="track-6" aria-pressed="false">M</button>
+                      <button type="button" class="track-toggle-button track-solo-button" data-track-id="track-6" aria-pressed="false">S</button>
+                    </div>
+                    <label class="track-slider track-pan">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <input class="track-pan-slider vertical-slider" data-track-id="track-6" type="range" min="-100" max="100" value="0" />
+                      <output class="track-pan-value track-slider-overlay" data-track-id="track-6">PAN C</output>
+                    </label>
+                    <label class="track-slider track-volume">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <span class="track-slider-fill" aria-hidden="true"></span>
+                      <input class="track-volume-slider vertical-slider" data-track-id="track-6" type="range" min="0" max="100" step="any" value="70.7945784384138" />
+                      <output class="track-volume-value track-slider-overlay" data-track-id="track-6">GAIN 0 dB</output>
+                    </label>
+                  </div>
+                </aside>
+                <aside class="track-strip" data-track-id="track-7">
+                  <span class="track-badge">07</span>
+                  <button type="button" class="track-fx-button" data-track-id="track-7" aria-pressed="false">FX</button>
+                  <div class="track-controls">
+                    <div class="track-toggle-stack">
+                      <button type="button" class="track-toggle-button track-mute-button" data-track-id="track-7" aria-pressed="false">M</button>
+                      <button type="button" class="track-toggle-button track-solo-button" data-track-id="track-7" aria-pressed="false">S</button>
+                    </div>
+                    <label class="track-slider track-pan">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <input class="track-pan-slider vertical-slider" data-track-id="track-7" type="range" min="-100" max="100" value="0" />
+                      <output class="track-pan-value track-slider-overlay" data-track-id="track-7">PAN C</output>
+                    </label>
+                    <label class="track-slider track-volume">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <span class="track-slider-fill" aria-hidden="true"></span>
+                      <input class="track-volume-slider vertical-slider" data-track-id="track-7" type="range" min="0" max="100" step="any" value="70.7945784384138" />
+                      <output class="track-volume-value track-slider-overlay" data-track-id="track-7">GAIN 0 dB</output>
+                    </label>
+                  </div>
+                </aside>
+                <aside class="track-strip" data-track-id="track-8">
+                  <span class="track-badge">08</span>
+                  <button type="button" class="track-fx-button" data-track-id="track-8" aria-pressed="false">FX</button>
+                  <div class="track-controls">
+                    <div class="track-toggle-stack">
+                      <button type="button" class="track-toggle-button track-mute-button" data-track-id="track-8" aria-pressed="false">M</button>
+                      <button type="button" class="track-toggle-button track-solo-button" data-track-id="track-8" aria-pressed="false">S</button>
+                    </div>
+                    <label class="track-slider track-pan">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <input class="track-pan-slider vertical-slider" data-track-id="track-8" type="range" min="-100" max="100" value="0" />
+                      <output class="track-pan-value track-slider-overlay" data-track-id="track-8">PAN C</output>
+                    </label>
+                    <label class="track-slider track-volume">
+                      <span class="track-slider-rail" aria-hidden="true"></span>
+                      <span class="track-slider-fill" aria-hidden="true"></span>
+                      <input class="track-volume-slider vertical-slider" data-track-id="track-8" type="range" min="0" max="100" step="any" value="70.7945784384138" />
+                      <output class="track-volume-value track-slider-overlay" data-track-id="track-8">GAIN 0 dB</output>
+                    </label>
+                  </div>
+                </aside>
+              </div>
+              <div class="timeline-grid" id="timeline-grid">
+                <div id="timeline-grid-negative-overlay" class="timeline-negative-overlay timeline-negative-overlay-grid"></div>
+                <div id="drag-overlay-layer" class="drag-overlay-layer"></div>
+                <div id="selection-rectangle" class="selection-rectangle" hidden></div>
+              </div>
+              <aside id="master-strip" class="master-strip">
+                <label class="master-slider track-slider track-volume">
+                  <div class="master-scale" aria-hidden="true">
+                    <span class="master-scale-tick" style="--tick-ratio: 1"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.9285714286"></span>
+                    <span class="master-scale-tick master-scale-tick-zero" style="--tick-ratio: 0.8571428571"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.7857142857"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.7142857143"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.6428571429"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.5714285714"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.5"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.4285714286"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.3571428571"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.2857142857"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.2142857143"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.1428571429"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0.0714285714"></span>
+                    <span class="master-scale-tick" style="--tick-ratio: 0"></span>
+                  </div>
+                  <span class="track-slider-rail" aria-hidden="true"></span>
+                  <span class="track-slider-fill" aria-hidden="true"></span>
+                  <input
+                    id="master-volume-slider"
+                    class="master-volume-slider vertical-slider"
+                    type="range"
+                    min="-72"
+                    max="12"
+                    step="any"
+                    value="0"
+                  />
+                  <output id="master-volume-value" class="master-volume-value track-slider-overlay">MASTER 0.0 dB</output>
+                </label>
+              </aside>
+            </div>
+            <div class="timeline-footer">
+              <div class="timeline-footer-spacer"></div>
+              <div class="timeline-footer-status">
+                <span id="timeline-footer-version" class="timeline-footer-meta">WebDAW v0.2.0</span>
+                <span id="timeline-footer-message" class="timeline-footer-message"></span>
+                <div class="timeline-footer-right">
+                  <span id="timeline-footer-zoom" class="timeline-footer-meta">Z27</span>
+                  <span id="timeline-footer-sample-rate" class="timeline-footer-meta">48 kHz</span>
+                </div>
+              </div>
+              <div class="timeline-footer-master-spacer"></div>
+            </div>
+          </div>
+        </article>
+
+        <div id="fx-panel" class="fx-panel" hidden>
+          <div class="fx-panel-backdrop"></div>
+          <div class="fx-panel-content">
+            <div class="fx-panel-header">
+              <span class="fx-panel-kicker">FX CHAIN</span>
+              <span id="fx-panel-track-label" class="fx-panel-track-label"></span>
+              <button id="fx-panel-new" type="button" class="fx-panel-new" aria-label="New effect" title="New Faust effect">+</button>
+              <button id="fx-panel-close" type="button" class="fx-ctrl fx-ctrl-delete" title="Close">&#10005;</button>
+            </div>
+            <div id="fx-panel-list" class="fx-panel-list">
+              <div class="fx-panel-empty">Drop .dsp files here to add effects</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="tutorial-overlay" class="tutorial-overlay" hidden aria-hidden="true">
+          <div id="tutorial-overlay-backdrop" class="tutorial-overlay-backdrop"></div>
+          <section class="tutorial-overlay-panel" aria-label="Tutorial videos">
+            <button id="tutorial-overlay-close" type="button" class="tutorial-overlay-close" aria-label="Close tutorial overlay">Close</button>
+            <div class="tutorial-overlay-grid">
+              <video
+                id="overlay-tutorial-left"
+                class="tutorial-overlay-video"
+                playsinline
+                preload="metadata"
+                controls
+                aria-label="Tutorial video left"
+              ></video>
+              <video
+                id="overlay-tutorial-right"
+                class="tutorial-overlay-video"
+                playsinline
+                preload="metadata"
+                controls
+                aria-label="Tutorial video right"
+              ></video>
+            </div>
+          </section>
+        </div>
+
+        <div id="transform-panel" class="transform-panel" hidden>
+          <div class="transform-panel-backdrop"></div>
+          <div class="transform-panel-content">
+            <div class="transform-panel-header">
+              <span class="transform-panel-kicker">FAUST TRANSFORM</span>
+              <span id="transform-panel-status" class="transform-panel-status">Ready</span>
+              <button id="transform-panel-new" type="button" class="fx-panel-new" aria-label="New effect" title="New Faust effect">+</button>
+              <button id="transform-panel-close" type="button" class="fx-ctrl fx-ctrl-delete" title="Close">&#10005;</button>
+            </div>
+            <div id="transform-panel-list" class="fx-panel-list">
+              <div class="fx-panel-empty">Drop .dsp files here to add effects</div>
+            </div>
+            <div class="transform-panel-footer">
+              <button id="transform-panel-apply" type="button" class="transform-panel-button transform-panel-button--apply">Apply</button>
+              <button id="transform-panel-cancel" type="button" class="transform-panel-button transform-panel-button--cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="faust-editor" class="faust-editor" hidden>
+          <div class="faust-editor-content">
+            <div class="faust-editor-header">
+              <span id="faust-editor-title" class="faust-editor-title">Effect</span>
+              <span id="faust-editor-channels" class="faust-editor-channels"></span>
+              <span class="faust-editor-header-spacer"></span>
+              <button id="faust-editor-close" class="fx-ctrl fx-ctrl-delete" title="Close">&#10005;</button>
+            </div>
+            <div id="faust-editor-codemirror" class="faust-editor-code"></div>
+            <div id="faust-editor-error" class="faust-editor-error" hidden></div>
+            <div class="faust-editor-options">
+              <label class="faust-editor-option-label">
+                <input id="faust-editor-autocompile" type="checkbox" />
+                Auto-compile
+              </label>
+            </div>
+            <div class="faust-editor-footer">
+              <button id="faust-editor-compile" type="button" class="faust-editor-button faust-editor-button--compile">Compile</button>
+              <button id="faust-editor-revert" type="button" class="faust-editor-button faust-editor-button--revert">Revert</button>
+              <button id="faust-editor-close-btn" type="button" class="faust-editor-button faust-editor-button--close">Close</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="clip-context-menu" class="popup-menu" hidden>
+          <button id="clip-context-rename" type="button" class="popup-menu-item"><span>Rename Clip…</span></button>
+          <hr class="popup-menu-separator">
+          <button id="clip-context-split" type="button" class="popup-menu-item"><span>Split at Cut</span><kbd>S</kbd></button>
+          <button id="clip-context-merge" type="button" class="popup-menu-item"><span>Merge</span><kbd>M</kbd></button>
+          <button id="clip-context-crossfade" type="button" class="popup-menu-item"><span>Crossfade</span><kbd>X</kbd></button>
+          <hr class="popup-menu-separator">
+          <button id="clip-context-reverse" type="button" class="popup-menu-item"><span>Reverse</span><kbd>R</kbd></button>
+          <button id="clip-context-faust-transform" type="button" class="popup-menu-item"><span>Faust Transform…</span><kbd>T</kbd></button>
+          <hr class="popup-menu-separator">
+          <button id="clip-context-play" type="button" class="popup-menu-item"><span>Play Selection</span><kbd>P</kbd></button>
+          <hr class="popup-menu-separator">
+          <button id="clip-context-delete" type="button" class="popup-menu-item"><span>Delete</span><kbd>⌫</kbd></button>
+          <hr id="clip-context-source-separator" class="popup-menu-separator">
+          <button id="clip-context-open-source" type="button" class="popup-menu-item"><span>Open Source Session</span></button>
+          <button id="clip-context-update-source" type="button" class="popup-menu-item"><span>Update From Source Session</span></button>
+        </div>
+
+        <section id="clip-onset-panel" class="onset-panel" hidden aria-label="Onset detection panel">
+          <header class="onset-panel-header">
+            <div class="onset-panel-heading">
+              <span class="onset-panel-kicker">Onset Detection</span>
+              <strong id="clip-onset-title" class="onset-panel-title">Clip</strong>
+            </div>
+          </header>
+          <div class="onset-panel-body">
+            <label class="onset-panel-field">
+              <span class="onset-panel-label-row">
+                <span>Sensitivity</span>
+                <output id="clip-onset-sensitivity-value" class="onset-panel-value">55</output>
+              </span>
+              <input id="clip-onset-sensitivity" type="range" min="1" max="100" step="1" value="55" />
+            </label>
+            <label class="onset-panel-field">
+              <span class="onset-panel-label-row">
+                <span>Minimum spacing</span>
+                <output id="clip-onset-spacing-value" class="onset-panel-value">30 ms</output>
+              </span>
+              <input id="clip-onset-spacing" type="range" min="5" max="500" step="1" value="30" />
+            </label>
+            <label class="onset-panel-check">
+              <input id="clip-onset-refine" type="checkbox" checked />
+              <span>Refine cuts to nearby zero crossings</span>
+            </label>
+            <div id="clip-onset-status" class="onset-panel-status">Previewing detected onsets…</div>
+          </div>
+          <footer class="onset-panel-actions">
+            <button id="clip-onset-apply" type="button" class="toolbar-action compact-button">Apply</button>
+            <button id="clip-onset-explode" type="button" class="toolbar-action compact-button">Explode</button>
+            <button id="clip-onset-cancel" type="button" class="toolbar-action compact-button secondary">Cancel</button>
+          </footer>
+        </section>
+
+      </section>
+    </main>
+
+    <div id="zoom-indicator" class="zoom-indicator" hidden></div>
+
+    <script type="module" src="../dist/demo/main.js?v=prototype-surface-3"></script>
+  </body>
+</html>
