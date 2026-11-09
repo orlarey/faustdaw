@@ -13,7 +13,7 @@ Ce document met les outils de webdaw en correspondance avec le modèle abstrait 
 | 2 | **faust-fx** | par effet | Code source + paramètres + métadonnées d'un effet |
 | 2a | **faust-editor** | par effet (transient à l'ouverture) | Buffer texte du code |
 | 2b | **faust-orbit-ui** | par effet | Viewport + sélection (les paramètres restent document de 2) |
-| 3b | **calque-preset** | par uiHash (workspace, partagé entre orbit-ui exposant la même interface paramètres) | Bibliothèque IDB des presets |
+| 3b | **calque-preset** | par effet (la vue orbit-ui de l'effet sur lequel on travaille) | Bibliothèque IDB des presets — elle-même partagée par uiHash entre les effets de même interface paramètres |
 
 Les niveaux 2a et 2b sont des sous-outils de 2 ; le niveau 3b est sous-outil de 2b.
 
@@ -40,13 +40,13 @@ Le project document reste une structure mutable unique. Chaque scope enregistre 
 - **Effect scope** (2) — un par effet — diffs sur le contenu d'un effet (code, params, métadonnées).
 - **Editor scope** (2a) — un par session d'édition — buffer texte (déjà fourni par CodeMirror).
 - **Orbit-ui scope** (2b) — un par effet — minimal ou vide suivant qu'on traite viewport / sélection comme état observable.
-- **Library scope** (3b) — un par uiHash — Add / Rename / Delete / Trash batch sur la bibliothèque IDB.
+- **Library scope** (3b) — un par effet — Add / Rename / Delete / Trash batch sur la bibliothèque IDB (partagée par uiHash).
 
 L'indépendance des scopes (règle 1 de la spec) découle du fait que les diffs sont disjoints sur des slices disjointes du document.
 
 ## Identité par interface paramètres (`uiHash`) vs identité par source (`codeHash`)
 
-Pour les scopes qui dépendent d'un effet Faust (2b orbit-ui, 3b calque-preset), la clef d'identification doit refléter l'**interface paramètres** du DSP — la liste de ses `vslider / hslider / nentry / ...` avec leurs adresses, plages, valeurs par défaut — et non la chaîne source complète.
+Pour ce qui dépend d'un effet Faust (le scope 2b orbit-ui, et la bibliothèque de presets qu'édite 3b), la clef d'identification doit refléter l'**interface paramètres** du DSP — la liste de ses `vslider / hslider / nentry / ...` avec leurs adresses, plages, valeurs par défaut — et non la chaîne source complète.
 
 La raison est concrète. L'utilisateur qui a investi du temps à fabriquer une bibliothèque de presets pour un effet, puis qui découvre une petite correction à apporter au code DSP (refactor interne, ajout d'un commentaire, fix d'un bug n'affectant pas l'UI), ne doit pas perdre l'accès à ses presets. Tant que la signature paramètres est inchangée, les presets restent applicables — leur `Record<address, value>` ne référence que les adresses, qui n'ont pas bougé.
 
@@ -94,9 +94,17 @@ type UndoScopeKey =
 
 **Pourquoi le `uiHash` dans 2b mais pas dans 2.** Le document de 2 (faust-fx) **contient** le code — un édit de code est une entrée légitime dans ce scope. Le code reste donc dans le document, pas dans la clef. Le document de 2b (orbit-ui) est un layout dans l'espace des paramètres, qui n'a de sens que **relativement** à la signature paramètres courante ; un changement d'UI rend le layout précédent inutilisable. La signature est donc dans la clef de 2b, pas dans son document. Règle générale : *un outil dont l'état n'a de sens que dans un certain contexte doit porter ce contexte dans sa clef.*
 
-**Particularité du scope library (3b).** Sa clef ne contient pas d'identifiant d'instance d'outil ; elle est dérivée de la **signature paramètres** (`uiHash`). Conséquence directe : plusieurs orbit-ui actifs sur la même signature partagent une seule pile d'undo bibliothèque. La suppression du dernier effet utilisant cette signature ne purge pas le scope — l'historique reste accessible si un autre effet de même signature est créé plus tard dans la session. C'est l'illustration concrète de la clause d'échappement de la règle 6 : *« sauf si le produit définit explicitement un outil global partagé »*.
+**Scope library (3b) : on annule ce sur quoi l'on travaille.** Décision de l'utilisateur (2026-11-09) : Cmd+Z n'agit que sur ce que l'on voit et sur quoi l'on travaille. La pile d'undo bibliothèque est donc **par effet** — celle de la vue orbit-ui de l'effet focalisé —, pas par uiHash. Ce qui est partagé par uiHash, c'est la **bibliothèque** elle-même (le store IDB), pas son historique :
 
-**Garbage collection.** Pour tous les autres scopes, la disparition de l'entité-clef (track, effet) déclenche la collecte du scope correspondant. Pour le scope library, la collecte se fait à fin de session.
+- supprimer un preset P en travaillant sur l'effet de la piste 3 l'enlève aussi des vues des autres effets de même uiHash (même bibliothèque) ; Cmd+Z sur l'effet de la piste 3 le rétablit, et il réapparaît partout ;
+- Cmd+Z sur l'effet de la piste 1 n'annule pas une action faite sur l'effet de la piste 3 ;
+- chaque vue n'écrit dans le store que ses propres changements (delta, `preset-library-sync.ts`), si bien qu'une vue ou un onglet ne défait jamais ce qu'une autre a écrit.
+
+(Une version antérieure de cette spec prévoyait une pile unique par uiHash, partagée entre orbit-ui et survivant à la suppression de l'effet ; elle est abandonnée.)
+
+**Garbage collection.** La disparition de l'entité-clef (track, effet, vue orbit-ui de l'effet) déclenche la collecte du scope correspondant, y compris pour le scope library.
+
+**Limite actuelle (reportée).** `faust-orbit-ui` vide la pile bibliothèque d'une vue dès que sa bibliothèque change de l'extérieur (`setLibrary` → `libraryUndo.clear()` : autre effet de même uiHash, autre onglet) et quand le panneau reconstruit ses vues. Un ajout sans rapport fait ailleurs efface donc l'historique de la vue où l'on travaille. Ne plus vider la pile sur un changement extérieur sans rapport demande de modifier `faust-orbit-ui` et de décider quoi faire quand l'opération à annuler n'a plus de sens (preset renommé ou supprimé ailleurs entre-temps).
 
 ## Audit de l'implémentation actuelle
 
@@ -109,16 +117,16 @@ Arbitrage UX tranché par l'utilisateur (2026-11-09) : **scopes par niveau**, pa
 | Effect scope (2) | `faust-fx-undo.ts` : ops « params » et « code » (une compilation dans l'éditeur Faust, 2a → 2), annulées avec le focus sur l'effet | ✓ |
 | Editor scope (2a) | Fourni par CodeMirror, save = commit vers `FxEffect.code` | ✓ |
 | Orbit-ui scope (2b) | Non audité depuis la version précédente de ce tableau | ? |
-| Library scope (3b) | `preset-library-undo.ts` (pile par signature paramètres) ; non audité en détail | ? |
+| Library scope (3b) | Pile par effet, interne à `faust-orbit-ui` (`libraryUndo` de chaque instance OrbitUI) ; Cmd+Z routé par `wireLibraryUndoKeyboard` (`preset-library-undo.ts`) vers l'OrbitUI de l'effet dont le calque a le focus ; écriture par delta dans le store partagé (`preset-library-sync.ts`). La pile par uiHash `LibraryUndoScope` du même fichier n'est plus atteinte : seul `PresetOverlay`, jamais instancié, l'utilise. Limite : pile vidée à tout changement extérieur de la bibliothèque (voir ci-dessus) | ✓ (limite reportée) |
 
 Routage clavier : les gestionnaires de scope sont des écouteurs `keydown` en capture sur `window` ; chacun consomme la frappe avec `stopImmediatePropagation`, si bien qu'un seul scope traite une frappe même quand appliquer l'op déplace le focus.
 
-**Synthèse** : les niveaux 0, 1, 2 et 2a sont séparés ; 2b et 3b restent à auditer.
+**Synthèse** : les niveaux 0, 1, 2, 2a et 3b sont séparés ; 2b reste à auditer ; pour 3b, la pile vidée par les changements extérieurs est une limite reportée.
 
 ## Écart à combler
 
 1. **Refactor du monolithique en diff-par-scope** sur le project document : transformer `commitCurrentSessionDocumentChange` en plusieurs piles, chacune scopée à sa slice. Cela couvre les niveaux 0, 1, 2 et 2b en une fois.
-2. **Création du Library scope (3b)** : pile dédiée Add / Rename / Delete / Trash batch sur la bibliothèque IDB. Indépendante du refactor 1 puisque la bibliothèque vit déjà dans un store distinct.
+2. **Library scope (3b)** : fait, par effet (voir l'audit). Reste, reporté : ne plus vider la pile d'une vue sur un changement extérieur sans rapport (modification de `faust-orbit-ui`).
 3. **Migration `codeHash` → `uiHash`** sur le système de presets (`preset-storage`, `preset-tracking`, panels, calque, menu de rappel) — préalable indispensable pour que les scopes 2b et 3b aient la stabilité voulue face aux édits de code n'affectant pas l'UI. Indépendant de la mécanique d'undo elle-même mais conditionne sa correction.
 4. **Décision sur 2b orbit-ui** : si on undo le viewport / la sélection, créer un scope minimal ; sinon accepter que ce sont des transients hors-undo.
 5. **Composition pour Cmd+Z** : routage par focus. Le scope focusé consomme le keystroke même s'il est vide — pas de fall-through vers le parent. Le contrat « ce que dit le footer = ce que Cmd+Z affecte » prime sur la commodité d'enchaîner des annulations à travers la hiérarchie. Applique les règles 1 (indépendance), 2 (persistance), 7 (bifurcation locale), 8 (politique de branches).
@@ -133,7 +141,7 @@ Routage clavier : les gestionnaires de scope sont des écouteurs `keydown` en ca
 
 L'étape 3b est isolable et autoporteuse — candidate naturelle pour une première étape concrète. Les étapes 1 + 2 demandent un refactor du système d'undo lui-même et un arbitrage UX (pile unifiée à la mode DAW vs scopes par niveau).
 
-Mise à jour (2026-11-09) : l'arbitrage est tranché en faveur des scopes par niveau, et les étapes 1 + 2 sont faites (voir l'audit ci-dessus).
+Mise à jour (2026-11-09) : l'arbitrage est tranché en faveur des scopes par niveau, et les étapes 1 + 2 sont faites (voir l'audit ci-dessus). L'étape 3b aussi, avec une pile par effet (on annule ce sur quoi l'on travaille) ; ne plus la vider sur un changement extérieur est reporté.
 
 ## Hors-scope
 

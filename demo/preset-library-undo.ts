@@ -5,6 +5,11 @@
  *          library (Add / Rename / Delete / Trash batch) live in their own
  *          stack, scoped per `uiHash`, persisting through the session.
  *          Routing of Cmd+Z to this scope happens when a calque is focused.
+ * Note (2026-11-09, UNDOREDOSPEC-WEBDAW 3b): the library undo is per effect.
+ *          `wireLibraryUndoKeyboard` routes Cmd+Z to the focused effect's
+ *          OrbitUI (its own library undo stack). The per-uiHash
+ *          `LibraryUndoScope` below is only reached by `PresetOverlay`,
+ *          which nothing instantiates any more.
  * How: A `LibraryUndoScope` class wraps `past` and `future` stacks of
  *      operations. Each operation carries enough information to be
  *      re-applied (redo) or inverted (undo) — typically the full record
