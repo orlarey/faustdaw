@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { enablePerf, generateDenseProject, openDemo } from "./bench-page.js";
+import { enablePerf, generateDenseProject, openDemo, summarizeFrames, type DisplayInfo, type FrameStats } from "./bench-page.js";
 
 type PerfRow = {
   metric: string;
@@ -43,6 +43,13 @@ type ScenarioResult = {
   warmupIterations: number;
   runs: AggregatedPerfRow[][];
   summary: AggregatedPerfRow[];
+  /** The animation frames of the measured runs, all together. */
+  frames: FrameStats;
+};
+
+type PanMeasure = {
+  snapshot: Record<string, { count: number; totalMs: number; maxMs: number }>;
+  frameIntervals: number[];
 };
 
 type ComparisonRow = {
@@ -159,9 +166,7 @@ function aggregateSnapshot(
     .sort((left, right) => right.totalMs - left.totalMs);
 }
 
-async function measureSteadyPanSnapshot(
-  page: Page,
-): Promise<Record<string, { count: number; totalMs: number; maxMs: number }>> {
+async function measureSteadyPan(page: Page): Promise<PanMeasure> {
   return page.evaluate(async () => {
     const ruler = document.getElementById("timeline-ruler") as HTMLElement | null;
     if (!ruler) {
@@ -176,7 +181,8 @@ async function measureSteadyPanSnapshot(
     const endX = rect.left + rect.width * 0.18;
     const y = rect.top + rect.height * 0.5;
     const startupSteps = 6;
-    const measuredSteps = 18;
+    // About one second of steady drag, so that the frame statistics rest on ~60 frames.
+    const measuredSteps = 60;
     const totalSteps = startupSteps + measuredSteps;
     const pointerId = 1;
 
@@ -206,6 +212,16 @@ async function measureSteadyPanSnapshot(
     // Measure only the steady-state middle of the drag, excluding the
     // initial gesture lock and the release/final settle.
     perfApi.reset();
+    const frameIntervals: number[] = [];
+    let lastFrame: number | null = null;
+    let recording = true;
+    const onFrame = (timestamp: number) => {
+      if (!recording) return;
+      if (lastFrame !== null) frameIntervals.push(timestamp - lastFrame);
+      lastFrame = timestamp;
+      requestAnimationFrame(onFrame);
+    };
+    requestAnimationFrame(onFrame);
 
     for (let step = startupSteps + 1; step <= totalSteps; step += 1) {
       const progress = step / totalSteps;
@@ -214,18 +230,19 @@ async function measureSteadyPanSnapshot(
       await new Promise((resolve) => window.setTimeout(resolve, 16));
     }
 
+    recording = false;
     const snapshot = perfApi.snapshot();
     dispatch("pointerup", endX);
     await new Promise((resolve) => window.setTimeout(resolve, 200));
-    return snapshot;
+    return { snapshot, frameIntervals };
   });
 }
 
-async function runScenario(page: Page, scenario: "empty" | "dense"): Promise<ScenarioResult> {
+async function runScenario(page: Page, scenario: "empty" | "dense"): Promise<ScenarioResult & { display: DisplayInfo }> {
   const WARMUP_ITERATIONS = 1;
   const MEASURED_ITERATIONS = 5;
 
-  await openDemo(page);
+  const display = await openDemo(page);
   await enablePerf(page);
 
   if (scenario === "dense") {
@@ -235,16 +252,18 @@ async function runScenario(page: Page, scenario: "empty" | "dense"): Promise<Sce
   await page.mouse.move(20, 20);
   await page.waitForTimeout(50);
   const runs: AggregatedPerfRow[][] = [];
+  const frameIntervals: number[] = [];
 
   for (let iteration = 0; iteration < WARMUP_ITERATIONS + MEASURED_ITERATIONS; iteration += 1) {
     await resetPerf(page);
-    const snapshot = await measureSteadyPanSnapshot(page);
+    const { snapshot, frameIntervals: intervals } = await measureSteadyPan(page);
     const aggregated = aggregateSnapshot(snapshot);
     if (aggregated.length === 0) {
       throw new Error(`No perf metrics collected for scenario: ${scenario}, iteration: ${iteration}`);
     }
     if (iteration >= WARMUP_ITERATIONS) {
       runs.push(aggregated);
+      frameIntervals.push(...intervals);
     }
   }
 
@@ -254,6 +273,8 @@ async function runScenario(page: Page, scenario: "empty" | "dense"): Promise<Sce
     warmupIterations: WARMUP_ITERATIONS,
     runs,
     summary: summarizeRuns(runs),
+    frames: summarizeFrames(frameIntervals),
+    display,
   };
 }
 
@@ -297,6 +318,7 @@ test("compare steady-state ruler pan cost between empty and dense project", asyn
   const comparison = buildComparison(empty, dense);
 
   const result = {
+    display: dense.display,
     scenarios: {
       empty,
       dense,

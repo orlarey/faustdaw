@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test";
 
-import { enablePerf, generateDenseProject, openDemo } from "./bench-page.js";
+import {
+  enablePerf,
+  generateDenseProject,
+  openDemo,
+  startFrameRecorder,
+  stopFrameRecorder,
+  summarizeFrames,
+} from "./bench-page.js";
 
 type PerfRow = {
   metric: string;
@@ -84,7 +91,7 @@ function aggregateSnapshot(
 test("bench dense ruler pan", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
 
-  await openDemo(page);
+  const display = await openDemo(page);
   await enablePerf(page);
   await generateDenseProject(page);
 
@@ -106,6 +113,7 @@ test("bench dense ruler pan", async ({ page }, testInfo) => {
   const steps = 24;
 
   await page.mouse.move(startX, y);
+  await startFrameRecorder(page);
   await page.mouse.down();
   for (let step = 1; step <= steps; step += 1) {
     const progress = step / steps;
@@ -113,6 +121,7 @@ test("bench dense ruler pan", async ({ page }, testInfo) => {
     await page.mouse.move(x, y);
     await page.waitForTimeout(16);
   }
+  const frames = summarizeFrames(await stopFrameRecorder(page));
   await page.mouse.up();
   await page.waitForTimeout(1200);
 
@@ -128,6 +137,8 @@ test("bench dense ruler pan", async ({ page }, testInfo) => {
 
   const result = {
     scenario: "dense-ruler-pan",
+    display,
+    frames,
     reportCount: reports.length,
     aggregated,
     raw: reports,
