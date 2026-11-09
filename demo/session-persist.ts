@@ -31,6 +31,7 @@ import { markPersistedSessionViewState } from "./session-autosave.js";
 import { refreshSessionWorkspaceControls, syncSessionNameChrome, syncSessionUrl } from "./session-chrome.js";
 import { broadcastWorkspaceSyncMessage } from "./session-broadcast.js";
 import { waitForAllPendingMaterializations } from "./session-render-materializations.js";
+import { collectHistoryFxResourcePayloads } from "./fx-resource-code-store.js";
 
 /**
  * Purpose: Build the current session archive and save it to the local
@@ -55,7 +56,15 @@ export async function persistWorkingSessionArchiveNow(elements?: Elements): Prom
   const sessionArchiveBytes = buildSessionArchiveBytes(
     currentSessionDocument,
     usedResourceIds.map((resourceId) => getArchiveResourcePayload(resourceId)),
-    collectFxResourcePayloads(demoState.project),
+    [
+      ...collectFxResourcePayloads(demoState.project),
+      // Resources only the undo/redo stacks reference (dropped by an undo):
+      // without their code, a redo after reload would restore an empty effect.
+      ...collectHistoryFxResourcePayloads(demoState.project, [
+        ...demoState.session.historyPast,
+        ...demoState.session.historyFuture,
+      ]),
+    ],
   );
   const sessionRevision = syncCurrentSessionRevision(currentSessionDocument);
   const metadata = await saveWorkingSessionArchive(demoState.session.id, sessionArchiveBytes, demoState.session.name, {

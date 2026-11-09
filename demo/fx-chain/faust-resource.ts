@@ -9,6 +9,7 @@
  *
  *****************************************************************************/
 import type { FxEffect, FxResourceId } from "../../src/domain/fx-chain.js";
+import { isFxResourceIdKnown } from "../fx-resource-code-store.js";
 import { importFxResource } from "../../src/fx-chain.js";
 import { demoState } from "../state.js";
 
@@ -35,7 +36,9 @@ function createNextEffectId(): string {
 
 function createNextFxResourceId(): FxResourceId {
   let resourceId = `fxr-${nextFxResourceOrdinal++}`;
-  while (demoState.project.fxResources.has(resourceId)) {
+  // An id absent from the project may still be referenced by the undo/redo
+  // history (with other code): never reissue it.
+  while (demoState.project.fxResources.has(resourceId) || isFxResourceIdKnown(resourceId)) {
     resourceId = `fxr-${nextFxResourceOrdinal++}`;
   }
   return resourceId;

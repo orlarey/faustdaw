@@ -124,6 +124,7 @@ import {
 } from "./fx-chain/faust-resource.js";
 import { wireTransformPanel, recompileTransformChainEffects } from "./faust-transform/faust-transform-panel.js";
 import { retainEffectRuntimes } from "./fx-chain/fx-chain-runtime.js";
+import { getFxResourceCodeStore, rememberFxResources, resetFxResourceCodeStore } from "./fx-resource-code-store.js";
 import { wireFaustEditor } from "./faust-editor/faust-editor.js";
 import { applyClipMagnetism } from "./magnetism.js";
 import { resolveClipAlignmentTarget } from "./placement.js";
@@ -1342,6 +1343,7 @@ async function applyLoadedSessionArchive(
   demoState.session.revision = options.targetSessionRevision ?? computeSessionDocumentRevision(archive.sessionDocument);
   demoState.session.inWorkspace = true;
   demoState.project = nextProject;
+  resetFxResourceCodeStore(archive.fxResources.map((fx) => ({ id: fx.fxResourceId, code: fx.code })));
   demoState.transformChain = extractTransformChain(archive.sessionDocument);
   restoredViewState.applyToDemoState(nextProject.timebase);
   demoState.transportLoop.resetTimingCounters();
@@ -1754,7 +1756,10 @@ function restoreSessionDocument(
   try {
     demoState.transportLoop.stop(elements);
     demoState.project = stop(demoState.project);
-    demoState.project = applySessionDocument(demoState.project, sessionDocument);
+    // The target document may reference an FX resource the current project
+    // dropped (redo after undo): take its code from the session's store.
+    rememberFxResources(demoState.project.fxResources.values());
+    demoState.project = applySessionDocument(demoState.project, sessionDocument, getFxResourceCodeStore());
     // Clip structure may have changed (undo/redo of cut, delete, move, …), so the
     // shared grid sliding buffers must be refilled from the restored project model.
     invalidateWaveformSlidingBuffers();
