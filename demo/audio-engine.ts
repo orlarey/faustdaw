@@ -29,6 +29,8 @@ export class AudioEngine {
   #silentGain: GainNode | null = null;
   #masterGain: GainNode | null = null;
   #shutdownTimeoutId: number | null = null;
+  /** The deferred suspend of the last Stop, until it settles (the context reads "running" meanwhile). */
+  #pendingSuspend: Promise<void> | null = null;
 
   // -------------------------------------------------------------------------
   // Read access
@@ -111,6 +113,13 @@ export class AudioEngine {
     }
 
     this.clearDeferredShutdown();
+    // A Stop's deferred suspend may already be in flight: the context still
+    // reads "running" until it settles, so resuming now would be skipped and
+    // the context would end up suspended under a playing transport. Wait for
+    // it, then resume.
+    if (this.#pendingSuspend) {
+      await this.#pendingSuspend;
+    }
     if (context.state === "suspended") {
       await context.resume();
     }
@@ -162,7 +171,14 @@ export class AudioEngine {
       const context = this.#context;
       this.#shutdownTimeoutId = window.setTimeout(() => {
         if (context.state === "running") {
-          void context.suspend();
+          const suspension: Promise<void> = context.suspend()
+            .catch(() => undefined)
+            .finally(() => {
+              if (this.#pendingSuspend === suspension) {
+                this.#pendingSuspend = null;
+              }
+            });
+          this.#pendingSuspend = suspension;
         }
         this.#shutdownTimeoutId = null;
       }, Math.ceil(START_STOP_FADE_SECONDS * 1000));

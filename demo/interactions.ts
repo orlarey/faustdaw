@@ -3388,6 +3388,7 @@ export function wireEvents(elements: Elements): void {
       render(elements);
       demoState.transportLoop.startIfNeeded(elements);
     } catch (error) {
+      demoState.transportLoop.abortFailedPlay(elements);
       const message = error instanceof Error ? error.message : String(error);
       pushRenderLog(`ERROR: ${message}`);
       render(elements);

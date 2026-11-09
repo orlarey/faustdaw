@@ -51,6 +51,7 @@ class PlaySelectionOperation implements MenuOperation {
       render(env.elements);
       demoState.transportLoop.startIfNeeded(env.elements);
     } catch (error) {
+      demoState.transportLoop.abortFailedPlay(env.elements);
       pushRenderLog(`ERROR: ${normalizeErrorMessage(error)}`);
       render(env.elements);
     }

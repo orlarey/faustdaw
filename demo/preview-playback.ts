@@ -49,6 +49,7 @@ export async function startPreviewClip(clipId: string, elements: Elements): Prom
     render(elements);
     demoState.transportLoop.startIfNeeded(elements);
   } catch (error) {
+    demoState.transportLoop.abortFailedPlay(elements);
     demoState.footer.setStatus(normalizeErrorMessage(error), "error");
   }
 }

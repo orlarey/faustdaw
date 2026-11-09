@@ -13,7 +13,7 @@
  *
  ******************************************************************************/
 import type { Elements } from "./bind-elements.js";
-import { seek } from "../src/domain/transport.js";
+import { seek, stop as stopTransport } from "../src/domain/transport.js";
 import { demoState } from "./state.js";
 import { recordPerfCounter } from "./perf.js";
 import { renderFrame } from "./daw-render/daw-render-runtime.js";
@@ -78,6 +78,19 @@ export class TransportLoop {
     this.#previewOffsetPx = 0;
     demoState.playbackSession.stop();
     demoState.audio.stopSilent();
+  }
+
+  /**
+   * Purpose: Return to a consistent stopped state after a Play that failed to start.
+   * How: Play switches the transport to Playing before the playback session
+   *      starts; if starting throws, stop the loop (session + silent engine)
+   *      and the transport, so the UI does not show Playing over silence.
+   */
+  abortFailedPlay(elements?: Elements): void {
+    this.stop(elements);
+    if (demoState.project.timeline.transport === "Playing") {
+      demoState.project = stopTransport(demoState.project);
+    }
   }
 
   /**
