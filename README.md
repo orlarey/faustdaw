@@ -78,21 +78,23 @@ npm run bench:browser:compare
 
 ```text
 src/
-  daw.ts                  domain model and operations
-  domain/
-    selection/            Selection class and SelectionOperation pattern
-      operations/         concrete operations (delete, split, merge, ...)
+  fx-chain.ts             effect-chain types
+  domain/                 domain model (project, timeline, track, clip, transport, output)
+    selection/            Selection class and contiguous-run helpers
     clip-operations.ts    low-level clip primitives (concatenate, crossfade)
-  marker/                 marker management
 
 demo/
   index.html              browser harness
+  main.ts                 entry point
   interactions.ts         UI adapter and event wiring
+  state.ts                mutable demo state
   clip-context-menu.ts    declarative context menu factory
+  menu-operations/        concrete selection operations (delete, split, merge, ...)
+  marker/                 marker management
   track/                  track rendering, audio routing, activity meters
   fx-chain/               Faust effect panel and runtime
   timeline/               timeline scene, waveform preview, drag overlay
-  state.ts                mutable demo state
+  vendor/                 vendored runtime libraries (faustwasm, ffmpeg, codemirror, orbit-ui)
 
 test/                     unit tests
 benchmarks/               Playwright browser benchmarks

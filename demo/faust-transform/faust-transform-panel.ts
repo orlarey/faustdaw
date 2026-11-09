@@ -838,7 +838,7 @@ export function wireTransformPanel(elements: Elements, _context: TransformPanelC
 
       // Load faustwasm module
       await ensureFaustCompiler();
-      const faustwsamUrl = new URL("/demo/vendor/faustwasm/index.js", window.location.origin).href;
+      const faustwsamUrl = new URL("./vendor/faustwasm/index.js", document.baseURI).href;
       const faustWasmModule = await import(/* @vite-ignore */ faustwsamUrl);
 
       // Read clip PCM

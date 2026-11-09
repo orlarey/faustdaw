@@ -156,7 +156,7 @@ test("TimelineClip.buildRenderModel derives session render linkage states withou
       sessionRenderResources: new Map([[resource.id, baseSessionRender]]),
       workspaceSessions: new Map([[baseSessionRender.sourceSessionId, { sessionName: "Rendered Session", sessionRevision: "rev-2" }]]),
       resourceSourceFiles: new Map(),
-      resourceAudioBuffers: new Map([[resource.id, {} as AudioBuffer]]),
+      resourceAudioBuffers: new Map([[resource.id, { numberOfChannels: 2 } as AudioBuffer]]),
       expectedMetaSuffix: "linked · stale",
       expectedLinked: true,
       expectedStale: true,
@@ -167,7 +167,7 @@ test("TimelineClip.buildRenderModel derives session render linkage states withou
       sessionRenderResources: new Map([[resource.id, baseSessionRender]]),
       workspaceSessions: new Map([[baseSessionRender.sourceSessionId, { sessionName: "Rendered Session", sessionRevision: "rev-1" }]]),
       resourceSourceFiles: new Map(),
-      resourceAudioBuffers: new Map([[resource.id, {} as AudioBuffer]]),
+      resourceAudioBuffers: new Map([[resource.id, { numberOfChannels: 2 } as AudioBuffer]]),
       expectedMetaSuffix: "linked · sync",
       expectedLinked: true,
       expectedStale: false,
@@ -192,7 +192,8 @@ test("TimelineClip.buildRenderModel derives session render linkage states withou
       presentationInputs,
     );
 
-    assert.equal(model.titleText, "Rendered Session", scenario.name);
+    const expectedTitle = scenario.resourceAudioBuffers.size > 0 ? "[S] Rendered Session" : "Rendered Session";
+    assert.equal(model.titleText, expectedTitle, scenario.name);
     assert.match(model.metaText, new RegExp(`${scenario.expectedMetaSuffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`), scenario.name);
     assert.equal(model.leftPx, 120, scenario.name);
     assert.equal(model.widthPx, 192, scenario.name);

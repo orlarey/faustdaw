@@ -53,7 +53,7 @@ let autoCompileTimeout: ReturnType<typeof setTimeout> | null = null;
 
 async function loadCodeMirror(): Promise<any> {
   if (cmModule) return cmModule;
-  const url = new URL("/demo/vendor/codemirror/codemirror.js", window.location.origin).href;
+  const url = new URL("./vendor/codemirror/codemirror.js", document.baseURI).href;
   cmModule = await import(/* @vite-ignore */ url);
   return cmModule;
 }
