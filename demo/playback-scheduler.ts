@@ -133,6 +133,7 @@ export class PlaybackScheduler {
         stopOffsetInPlan: effectiveStop - anchorTime,
         // Timeline coords -> resource frames (exact integer conversion, PLAYERSPEC).
         offsetInBufferFrames: clipSourceFrameAt(demoState.project, clip, effectiveStart),
+        fadeIn: effectiveStart > clip.start,
       });
       coveredUntil = Math.max(coveredUntil, effectiveStop);
     }
@@ -177,13 +178,17 @@ export class PlaybackScheduler {
       event.gain.connect(trackOutputGain);
 
       const duration = stopTime - startTime;
-      const fadeDuration = Math.min(START_STOP_FADE_SECONDS, duration / 2);
-      const fadeInEnd = startTime + fadeDuration;
-      const fadeOutStart = stopTime - fadeDuration;
-      event.gain.gain.setValueAtTime(0, startTime);
-      event.gain.gain.linearRampToValueAtTime(1, fadeInEnd);
-      event.gain.gain.setValueAtTime(1, fadeOutStart);
-      event.gain.gain.linearRampToValueAtTime(0, stopTime);
+      // PLAYERSPEC, Septième Décision: only artificial transitions are faded.
+      // A start inside the clip (Play/Seek) fades in; a clip's own edges are
+      // content and play unchanged, so contiguous clips (Split) rejoin
+      // sample-exactly and attacks are kept. Stop/Pause/Seek fade-outs are
+      // applied by #stopPlan.
+      if (event.fadeIn) {
+        event.gain.gain.setValueAtTime(0, startTime);
+        event.gain.gain.linearRampToValueAtTime(1, startTime + Math.min(START_STOP_FADE_SECONDS, duration));
+      } else {
+        event.gain.gain.setValueAtTime(1, startTime);
+      }
 
       event.sourceNode.onended = () => {
         event.sourceNode.disconnect();

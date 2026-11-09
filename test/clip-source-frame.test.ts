@@ -136,3 +136,29 @@ test("buildPlan at 44.1 kHz starts the buffer at the frame offset of the anchor"
   assert.equal(early.events[0]!.offsetInBufferFrames, 0);
   assert.equal(early.events[0]!.startOffsetInPlan, project.timebase.toTimeCoord(1));
 });
+
+test("buildPlan fades in only a clip entered mid-way, never a clip's own start", (t) => {
+  const resource: AudioResource = { id: "r2s", sampleRate: 48_000, channels: 1, length: 2 * 48_000 };
+  const project = importAudioResource(initProject("p"), resource);
+  const tb = project.timebase;
+  // Two contiguous 2 s clips: [2 s, 4 s) and [4 s, 6 s).
+  const first = placeClip(project, "a", resource, tb.toTimeCoord(2), "track-1");
+  const placed = placeClip(first, "b", resource, tb.toTimeCoord(4), "track-1");
+  const track = placed.timeline.tracks.find((candidate) => candidate.id === "track-1")!;
+  const fakeContext = { createBufferSource: () => ({ buffer: null }), createGain: () => ({ gain: { value: 1 } }) };
+  const fakeBuffer = { sampleRate: 48_000, length: resource.length, numberOfChannels: 1 };
+  const savedProject = demoState.project;
+  const savedAudio = demoState.audio;
+  demoState.project = placed;
+  demoState.audio = { context: fakeContext } as unknown as AudioEngine;
+  demoState.resources.audioBuffers.set(resource.id, fakeBuffer as unknown as AudioBuffer);
+  t.after(() => { demoState.project = savedProject; demoState.audio = savedAudio; demoState.resources.audioBuffers.delete(resource.id); });
+  // Play from 3 s: enters "a" mid-way (fade-in), reaches "b" at its own start (no fade).
+  const midway = demoState.scheduler.buildPlan(track, tb.toTimeCoord(3), tb.toTimeCoord(4));
+  assert.ok(midway);
+  assert.deepEqual(midway.events.map((event) => [event.clipId, event.fadeIn]), [["a", true], ["b", false]]);
+  // Play from 1 s (before both clips): no clip is entered mid-way.
+  const before = demoState.scheduler.buildPlan(track, tb.toTimeCoord(1), tb.toTimeCoord(6));
+  assert.ok(before);
+  assert.deepEqual(before.events.map((event) => event.fadeIn), [false, false]);
+});

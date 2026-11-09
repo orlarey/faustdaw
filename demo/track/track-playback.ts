@@ -37,6 +37,8 @@ export type TrackPlaybackEvent = {
   startOffsetInPlan: TimeCoord;
   stopOffsetInPlan: TimeCoord;
   offsetInBufferFrames: number;
+  /** True iff playback enters this clip mid-way (Play/Seek inside it): the only start that gets a fade-in (PLAYERSPEC, Septième Décision). */
+  fadeIn: boolean;
 };
 
 /**
