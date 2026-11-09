@@ -2,11 +2,11 @@
  *
  * Purpose: Remove every clip in the selection from the project. No PCM work,
  *          no resource changes — just unbind placements from the timeline.
- * How: Applies when the selection is non-empty. Execute clears the onset
- *      annotations of the doomed clips first (the onset editor closes itself
- *      if it was pointing at one of them), then folds `removeClip` over the
- *      selection ids, and finally restarts playback if the transport was
- *      running.
+ * How: Applies when the selection is non-empty. Inside the committed
+ *      transition (after the undo snapshot), folds `removeClip` over the
+ *      selection ids and clears the onset annotations of the removed clips
+ *      (the onset editor closes itself if it was pointing at one of them),
+ *      then restarts playback if the transport was running.
  *
  ******************************************************************************/
 import type { Selection } from "../../src/domain/selection/selection.js";
@@ -29,12 +29,14 @@ class DeleteOperation implements MenuOperation {
       ? `Remove clip "${sel.primaryClipId}"`
       : `Remove ${sel.size} clips`;
     const clipIds = [...sel.clipIds];
-    clearClipOnsetAnnotationsForClipIds(clipIds);
 
     const result = commitSelectionTransition(
       label,
       () => {
         const project = clipIds.reduce((p, id) => removeClip(p, id), sel.project);
+        // Clear annotations only after the undo snapshot has been taken
+        // (it carries each clip's onsetAnnotation), so Undo restores them.
+        clearClipOnsetAnnotationsForClipIds(clipIds);
         return SelectionNS.empty(project);
       },
       env.elements,

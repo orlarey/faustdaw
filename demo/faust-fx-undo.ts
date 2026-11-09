@@ -110,6 +110,15 @@ export class FaustFxUndoScope {
 
 const scopes = new Map<string, FaustFxUndoScope>();
 
+/**
+ * Purpose: Drop every scope when another session is loaded in this tab.
+ * How: Scope keys (chain ids, effect ids) repeat across sessions, so stale
+ *      ops from the previous session must not be replayed against the new one.
+ */
+export function clearFaustFxUndoScopes(): void {
+  scopes.clear();
+}
+
 export function getFaustFxUndoScope(key: FaustFxScopeKey): FaustFxUndoScope {
   const id = serializeKey(key);
   let scope = scopes.get(id);

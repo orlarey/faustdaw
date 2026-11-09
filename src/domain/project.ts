@@ -125,6 +125,8 @@ export function assertValidProject(project: Project): void {
     throw new Error("Invariant violation: project must expose exactly the fixed track set");
   }
 
+  // Clip ids are global primary keys: uniqueness spans every track.
+  const seenIds = new Set<ClipId>();
   for (const [index, track] of project.timeline.tracks.entries()) {
     if (track.id !== TRACK_IDS[index]) {
       throw new Error("Invariant violation: track order must match the fixed track set");
@@ -137,7 +139,6 @@ export function assertValidProject(project: Project): void {
     }
 
     let previousEnd = 0;
-    const seenIds = new Set<ClipId>();
     for (const clip of track.clips) {
       assertValidClip(project, clip);
       if (seenIds.has(clip.id)) {

@@ -129,7 +129,7 @@ export function observeOutput(project: Project): Output {
       clipId: clip.id,
       resourceId: clip.resource.id,
       offset: getClipSourceStartSample(clip)
-        + Math.floor((project.timeline.cursor - clip.start) / project.timebase.internalTimeRate * clip.resource.sampleRate),
+        + Math.floor(((project.timeline.cursor - clip.start) * clip.resource.sampleRate) / project.timebase.internalTimeRate),
       trackId: track.id,
     });
   }

@@ -50,9 +50,9 @@ let lastPersistedSessionViewStateSessionId: string | null = null;
 
 /**
  * Purpose: Schedule a debounced autosave of the working session archive.
- * How: Replace any pending timeout; after the delay, run
- *      `persistWorkingSessionArchiveNow`. If an archive persistence is already
- *      in flight, queue one more run after it completes.
+ * How: Replace any pending timeout; after the delay, hand off to
+ *      `runWorkingSessionAutosave`, which queues one more pass if a save is
+ *      already in flight.
  */
 export function scheduleWorkingSessionAutosave(elements?: Elements): void {
   if (workingSessionAutosaveTimeoutId !== null) {
@@ -60,43 +60,67 @@ export function scheduleWorkingSessionAutosave(elements?: Elements): void {
   }
   workingSessionAutosaveTimeoutId = window.setTimeout(() => {
     workingSessionAutosaveTimeoutId = null;
-    if (workingSessionAutosavePromise) {
-      workingSessionAutosaveQueued = true;
-      return;
-    }
-    workingSessionAutosavePromise = (async () => {
-      do {
-        workingSessionAutosaveQueued = false;
-        try {
-          await persistWorkingSessionArchiveNow(elements);
-        } catch (error) {
-          console.warn("[webdaw] working-session autosave failed", normalizeErrorMessage(error));
-        }
-      } while (workingSessionAutosaveQueued);
-    })().finally(() => {
-      workingSessionAutosavePromise = null;
+    runWorkingSessionAutosave(elements).catch((error) => {
+      console.warn("[webdaw] working-session autosave failed", normalizeErrorMessage(error));
     });
   }, WORKING_SESSION_AUTOSAVE_DELAY_MS);
 }
 
 /**
- * Purpose: Drain any pending working-session autosave (debounced or in flight).
- * How: Cancel the pending timeout, await any in-flight persistence, then
- *      force one final persist when the session is in the workspace.
+ * Purpose: Single entry point for every working-session archive save, so at
+ *          most one save is in flight and the last one always captures the
+ *          newest state.
+ * How: If a save is running, flag one more pass and return the running loop.
+ *      Otherwise start the loop; the returned promise settles with the first
+ *      pass (so callers see its error), while queued passes keep draining in
+ *      the tracked loop.
  */
+function runWorkingSessionAutosave(elements?: Elements): Promise<void> {
+  if (workingSessionAutosavePromise) {
+    workingSessionAutosaveQueued = true;
+    return workingSessionAutosavePromise;
+  }
+  workingSessionAutosaveQueued = false;
+  const firstPass = persistWorkingSessionArchiveNow(elements);
+  workingSessionAutosavePromise = (async () => {
+    try {
+      await firstPass;
+    } catch {
+      // Reported by the caller of runWorkingSessionAutosave.
+    }
+    while (workingSessionAutosaveQueued) {
+      workingSessionAutosaveQueued = false;
+      try {
+        await persistWorkingSessionArchiveNow(elements);
+      } catch (error) {
+        console.warn("[webdaw] working-session autosave failed", normalizeErrorMessage(error));
+      }
+    }
+  })().finally(() => {
+    workingSessionAutosavePromise = null;
+  });
+  return firstPass;
+}
+
 export async function flushPendingWorkingSessionAutosave(elements?: Elements): Promise<void> {
+  const hadPendingEdit = workingSessionAutosaveTimeoutId !== null;
   if (workingSessionAutosaveTimeoutId !== null) {
     window.clearTimeout(workingSessionAutosaveTimeoutId);
     workingSessionAutosaveTimeoutId = null;
   }
   if (workingSessionAutosavePromise) {
+    // The in-flight save snapshotted its state before the pending edit:
+    // request one more pass and wait for the whole loop to drain.
+    if (hadPendingEdit) {
+      workingSessionAutosaveQueued = true;
+    }
     await workingSessionAutosavePromise;
     return;
   }
   if (!demoState.session.inWorkspace) {
     return;
   }
-  await persistWorkingSessionArchiveNow(elements);
+  await runWorkingSessionAutosave(elements);
 }
 
 /**

@@ -108,6 +108,15 @@ export class ChainUndoScope {
 
 const scopes = new Map<FxChainId, ChainUndoScope>();
 
+/**
+ * Purpose: Drop every scope when another session is loaded in this tab.
+ * How: Scope keys (chain ids, effect ids) repeat across sessions, so stale
+ *      ops from the previous session must not be replayed against the new one.
+ */
+export function clearChainUndoScopes(): void {
+  scopes.clear();
+}
+
 export function getChainUndoScope(key: ChainScopeKey): ChainUndoScope {
   let scope = scopes.get(key.chainId);
   if (!scope) {

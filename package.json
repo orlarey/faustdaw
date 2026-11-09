@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/**/*.test.js",
+    "test": "npm run build && node --test dist/test/*.test.js",
     "serve": "python3 -m http.server 4183",
     "bench": "npm run build && node scripts/bench.mjs",
     "bench:browser": "npm run build && playwright test -c playwright.bench.config.ts",

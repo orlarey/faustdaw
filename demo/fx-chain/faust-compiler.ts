@@ -34,12 +34,12 @@ export async function ensureFaustCompiler(): Promise<void> {
   compilerLoadingPromise = (async () => {
     try {
       console.log("[faust] Loading faustwasm module…");
-      const faustwsamUrl = new URL("/demo/vendor/faustwasm/index.js", window.location.origin).href;
+      const faustwsamUrl = new URL("./vendor/faustwasm/index.js", document.baseURI).href;
       const mod: FaustWasmModule = await import(/* @vite-ignore */ faustwsamUrl);
       faustWasmModule = mod;
       console.log("[faust] faustwasm module loaded, instantiating compiler…");
 
-      const base = `${window.location.origin}/demo/libfaust-wasm/libfaust-wasm.js`;
+      const base = new URL("./libfaust-wasm/libfaust-wasm.js", document.baseURI).href;
       const faustModule = await mod.instantiateFaustModuleFromFile(
         base,
         base.replace(/\.js$/, ".data"),
