@@ -20,6 +20,7 @@ import {
 } from "./session-workspace.js";
 import { DEFAULT_TIMELINE_VIEW_DURATION, DEFAULT_TIMELINE_ZOOM_LEVEL_INDEX } from "./timeline/render-constants.js";
 import { demoState } from "./state.js";
+import { clearTabIdReleased, getTabIdentityStorage, markTabIdReleased, resolveTabId } from "./tab-identity.js";
 import { initProject } from "../src/domain/project.js";
 import { TimelineViewport } from "./view/timeline-viewport.js";
 
@@ -105,7 +106,18 @@ async function resolveInitialSession(): Promise<{ sessionId: string; sessionName
 async function main(): Promise<void> {
   setApplicationReadyState(false);
   const initialSession = await resolveInitialSession();
-  demoState.session.tabId = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const tabIdentityStorage = getTabIdentityStorage();
+  demoState.session.tabId = resolveTabId(
+    tabIdentityStorage,
+    () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+  );
+  // A reload keeps this id (and so its writer lease); see tab-identity.ts.
+  window.addEventListener("pagehide", () => markTabIdReleased(tabIdentityStorage, demoState.session.tabId));
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) {
+      clearTabIdReleased(tabIdentityStorage);
+    }
+  });
   demoState.session.id = initialSession.sessionId;
   demoState.session.name = initialSession.sessionName;
   demoState.session.inWorkspace = initialSession.sessionInWorkspace;

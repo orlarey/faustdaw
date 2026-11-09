@@ -2118,6 +2118,11 @@ export function wireEvents(elements: Elements): void {
   let sessionWriterRenewIntervalId: number | null = null;
   let sessionWriterRetryTimeoutId: number | null = null;
   let remoteSessionRefreshPromise: Promise<void> | null = null;
+  // A workspace-sync message received while a refresh runs: one more pass is due.
+  let remoteSessionRefreshRequested = false;
+  // Queue a follower refresh and wait for the queue to drain; set once the
+  // refresh queue exists (defined further down).
+  let refreshFromWorkspaceAndWaitRef: (() => Promise<void>) | null = null;
 
   const getReadOnlySessionMessage = (): string =>
     `Session "${demoState.session.name}" is open read-only in this tab`;
@@ -2131,6 +2136,30 @@ export function wireEvents(elements: Elements): void {
     return false;
   };
 
+  /**
+   * Purpose: Before a follower becomes the writer, make sure it holds the
+   *          stored state.
+   * How: A follower's copy may be stale (a refresh missed, or still running).
+   *      If the stored revision differs from the local one, reload the stored
+   *      state first: the new writer's first save would otherwise overwrite
+   *      the previous writer's last edits.
+   */
+  const refreshStaleCopyBeforeWriting = async (
+    metadata: Awaited<ReturnType<typeof claimLocalSessionWriter>>,
+  ): Promise<void> => {
+    if (
+      demoState.session.accessMode !== "follower"
+      || !metadata?.sessionRevision
+      || metadata.sessionRevision === demoState.session.revision
+      || !refreshFromWorkspaceAndWaitRef
+    ) {
+      return;
+    }
+    // Through the refresh queue, so it never runs alongside a refresh started
+    // by a workspace-sync message (the queue reports its own failures).
+    await refreshFromWorkspaceAndWaitRef();
+  };
+
   const claimCurrentSessionWriterForDirectInteraction = async (): Promise<boolean> => {
     if (!demoState.session.inWorkspace) {
       return true;
@@ -2138,6 +2167,7 @@ export function wireEvents(elements: Elements): void {
     const metadata = await claimLocalSessionWriter(demoState.session.id, demoState.session.tabId).catch(() => null);
     const isWriter = !metadata || metadata.writerTabId === demoState.session.tabId;
     if (isWriter) {
+      await refreshStaleCopyBeforeWriting(metadata);
       stopSessionWriterRetry();
       setSessionAccessMode("writer", elements, null);
       startSessionWriterHeartbeat();
@@ -2271,6 +2301,7 @@ export function wireEvents(elements: Elements): void {
     const metadata = await claimLocalSessionWriter(demoState.session.id, demoState.session.tabId).catch(() => null);
     const isWriter = !metadata || metadata.writerTabId === demoState.session.tabId;
     if (isWriter) {
+      await refreshStaleCopyBeforeWriting(metadata);
       stopSessionWriterRetry();
       setSessionAccessMode("writer", elements, null);
       startSessionWriterHeartbeat();
@@ -2310,17 +2341,39 @@ export function wireEvents(elements: Elements): void {
     });
   };
 
+  // One refresh at a time; a message received meanwhile requests one more
+  // pass, so the follower always ends on the latest stored state (a running
+  // refresh may have read the store before the newer save landed).
   const queueRemoteSessionRefresh = (): void => {
     if (remoteSessionRefreshPromise) {
+      remoteSessionRefreshRequested = true;
       return;
     }
     remoteSessionRefreshPromise = (async () => {
       try {
-        await refreshCurrentSessionFromWorkspace();
+        do {
+          remoteSessionRefreshRequested = false;
+          try {
+            await refreshCurrentSessionFromWorkspace();
+          } catch (error) {
+            console.warn("[webdaw] follower refresh failed", normalizeErrorMessage(error));
+          }
+        } while (remoteSessionRefreshRequested);
       } finally {
         remoteSessionRefreshPromise = null;
       }
     })();
+  };
+  refreshFromWorkspaceAndWaitRef = async () => {
+    // A refresh already running reads the latest store: wait for it instead of
+    // requesting another pass (applyLoadedSessionArchive re-syncs the writer
+    // lease from inside a refresh; requesting from there could loop).
+    if (!remoteSessionRefreshPromise) {
+      queueRemoteSessionRefresh();
+    }
+    while (remoteSessionRefreshPromise) {
+      await remoteSessionRefreshPromise;
+    }
   };
 
   workspaceSyncChannel?.addEventListener("message", (event: MessageEvent<WorkspaceSyncMessage>) => {
