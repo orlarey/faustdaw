@@ -166,6 +166,9 @@ export function moveEffect(project: Project, chainId: FxChainId, effectId: FxEff
   if (fromIndex < 0) {
     throw new Error(`Precondition violation: effect "${effectId}" not found on chain "${chainId}"`);
   }
+  if (!Number.isInteger(toIndex) || toIndex < 0 || toIndex >= chain.effects.length) {
+    throw new Error(`Precondition violation: toIndex ${toIndex} out of range [0, ${chain.effects.length - 1}]`);
+  }
   if (fromIndex === toIndex) {
     return project;
   }

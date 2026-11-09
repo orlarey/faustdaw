@@ -156,6 +156,34 @@ test("observeOutput returns a mix of active clips across tracks", () => {
   });
 });
 
+test("observeOutput computes the exact integer read offset (no float floor error)", () => {
+  const imported = importAudioResource(initProject("p0"), resource);
+  const placed = placeClip(imported, "clip-1", resource, 0, "track-1");
+  const playing = play(placed);
+
+  // floor(27 / 48000 * 48000) === 26 in IEEE-754; the spec requires exactly 27.
+  for (const cursor of [27, 3_680, 95_999]) {
+    const output = observeOutput(seek(playing, cursor));
+    assert.equal(output.type, "Mix");
+    assert.equal(output.type === "Mix" ? output.signals[0]?.offset : undefined, cursor);
+  }
+});
+
+test("assertValidProject rejects a clip id duplicated across two tracks", () => {
+  const imported = importAudioResource(initProject("p0"), resource);
+  const placed = placeClip(imported, "dup", resource, 0, "track-1");
+  const clip = trackClips(placed, "track-1")[0];
+  assert.ok(clip);
+  const corrupted = {
+    ...placed,
+    timeline: {
+      ...placed.timeline,
+      tracks: placed.timeline.tracks.map((track) => track.id === "track-2" ? { ...track, clips: [clip] } : track),
+    },
+  };
+  assert.throws(() => assertValidProject(corrupted), /clip ids must be unique/);
+});
+
 test("clipEnd and isActive implement the half-open active interval", () => {
   const imported = importAudioResource(initProject("p0"), resource);
   const placed = placeClip(imported, "clip-1", resource, timebase.toTimeCoord(2), "track-1");
