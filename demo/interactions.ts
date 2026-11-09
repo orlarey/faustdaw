@@ -3733,8 +3733,15 @@ export function wireEvents(elements: Elements): void {
   }
 
   window.addEventListener("keydown", (event) => {
+    // While clips are being dragged, the document must not change under the
+    // gesture: ignore undo/redo and the clip operation shortcuts (Delete, ...).
+    const isClipDragInProgress = demoState.dragState !== null;
     if ((event.metaKey || event.ctrlKey) && !isEditableTarget(event.target)) {
       const normalizedKey = event.key.toLowerCase();
+      if (isClipDragInProgress && (normalizedKey === "z" || normalizedKey === "y")) {
+        event.preventDefault();
+        return;
+      }
       if (normalizedKey === "z" && !event.repeat) {
         event.preventDefault();
         if (!notifyReadOnlySession()) {
@@ -3790,6 +3797,7 @@ export function wireEvents(elements: Elements): void {
     if (
       !event.metaKey && !event.ctrlKey && !event.altKey
       && !event.repeat && !isEditableTarget(event.target)
+      && !isClipDragInProgress
       && clipContextMenu.handleShortcut(event.key, getCurrentSelection())
     ) {
       event.preventDefault();

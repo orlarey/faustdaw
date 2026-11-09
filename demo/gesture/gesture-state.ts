@@ -10,6 +10,9 @@
 import type { TimeCoord } from "../../src/domain/timebase.js";
 import type { TrackId } from "../../src/domain/track-id.js";
 
+/** Pointer travel (px) before a press on a clip becomes a drag; same as the marquee selection. */
+export const DRAG_THRESHOLD_PX = 4;
+
 /**
  * Purpose: Track the in-flight state of a clip drag gesture.
  * How: Store the pointer identity, raw and snapped preview positions, and target track.
@@ -22,6 +25,11 @@ export type DragState = {
   previewDetachedFromBackground: boolean;
   duplicateOnDrag: boolean;
   pointerId: number;
+  /** Pointer position at pointerdown, for the drag threshold. */
+  startPointerX: number;
+  startPointerY: number;
+  /** True once the pointer has moved past DRAG_THRESHOLD_PX: before that, a release is a plain click. */
+  moved: boolean;
   grabTime: TimeCoord;
   pointerOffsetCoord: TimeCoord;
   pointerOffsetTrack: number;

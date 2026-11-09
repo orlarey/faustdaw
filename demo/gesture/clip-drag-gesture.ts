@@ -41,7 +41,7 @@ import {
   commitCurrentSessionDocumentChange,
   createCurrentSessionDocument,
 } from "../session-history.js";
-import { EDGE_SCROLL_ZONE_PX } from "./gesture-state.js";
+import { DRAG_THRESHOLD_PX, EDGE_SCROLL_ZONE_PX } from "./gesture-state.js";
 import { CLIP_ALIGNMENT_GUIDE_MAGNETISM_PX, applyClipMagnetism } from "../magnetism.js";
 import { resolveClipAlignmentTarget } from "../placement.js";
 import { captureClipPresentationInputs } from "../clip/clip-presentation-inputs.js";
@@ -653,6 +653,9 @@ export function wireClipDragging(elements: Elements): void {
       previewDetachedFromBackground: false,
       duplicateOnDrag,
       pointerId: event.pointerId,
+      startPointerX: event.clientX,
+      startPointerY: event.clientY,
+      moved: false,
       grabTime,
       pointerOffsetCoord: grabTime - sourceGroupStart,
       pointerOffsetTrack: clickedTrackIndex - sourceGroupMinTrackIndex,
@@ -709,6 +712,17 @@ export function wireClipDragging(elements: Elements): void {
     if (!demoState.dragState || event.pointerId !== demoState.dragState.pointerId) {
       return;
     }
+    if (!demoState.dragState.moved) {
+      // Below the threshold the press is still a click: no preview, no snapping.
+      const travelPx = Math.hypot(
+        event.clientX - demoState.dragState.startPointerX,
+        event.clientY - demoState.dragState.startPointerY,
+      );
+      if (travelPx < DRAG_THRESHOLD_PX) {
+        return;
+      }
+      demoState.dragState.moved = true;
+    }
     getDraggedClipStart(event, elements);
     demoState.dragState.previewTrackId = getTrackIdFromCachedGridClientY(event.clientY);
     updateDragPreviewPlacements(demoState.dragState);
@@ -731,6 +745,15 @@ export function wireClipDragging(elements: Elements): void {
       return;
     }
     if (!demoState.dragState || event.pointerId !== demoState.dragState.pointerId) {
+      return;
+    }
+    const draggedClipsStillExist = demoState.dragState.clipIds.every(
+      (draggedClipId) => getIndexedClip(demoState.project, draggedClipId) !== null,
+    );
+    if (!demoState.dragState.moved || !draggedClipsStillExist) {
+      // A plain click (selection only), or the dragged clips changed under the
+      // gesture: end it without touching the document.
+      abortDrag(event);
       return;
     }
     if (options?.recomputePreviewFromEvent ?? true) {
@@ -813,9 +836,30 @@ export function wireClipDragging(elements: Elements): void {
     demoState.playbackSession.restartIfNeeded();
   };
 
-  elements.timelineGrid.addEventListener("pointerup", finishDrag);
-  elements.timelineGrid.addEventListener("pointercancel", (event) => {
+  /**
+   * Purpose: End a clip drag or a marquee without changing the document.
+   * How: Stop auto-scroll, release the pointer capture, drop the gesture state
+   *      and redraw the clips at their committed positions.
+   */
+  const abortDrag = (event: PointerEvent): void => {
     stopClipAutoScroll();
-    finishDrag(event, { recomputePreviewFromEvent: false });
-  });
+    if (elements.timelineGrid.hasPointerCapture(event.pointerId)) {
+      elements.timelineGrid.releasePointerCapture(event.pointerId);
+    }
+    if (demoState.selectionRectState && event.pointerId === demoState.selectionRectState.pointerId) {
+      clearSelectionRect();
+      return;
+    }
+    if (!demoState.dragState || event.pointerId !== demoState.dragState.pointerId) {
+      return;
+    }
+    demoState.dragState = null;
+    demoState.clipRenderStable.dirty = true;
+    render(elements);
+  };
+
+  elements.timelineGrid.addEventListener("pointerup", finishDrag);
+  // pointercancel means the browser took the pointer away (touch scroll,
+  // system gesture, lost capture): the user did not drop, so nothing moves.
+  elements.timelineGrid.addEventListener("pointercancel", abortDrag);
 }
