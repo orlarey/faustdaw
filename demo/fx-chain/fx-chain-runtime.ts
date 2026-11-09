@@ -4,6 +4,10 @@
  * How: Keep a map keyed by FxEffectId. `compileFxEffect` orchestrates
  *      compilation through the faust-compiler module and inserts the result
  *      here. Consumers look up, register, destroy, or bulk-clear runtimes.
+ *      An effect id alone does not identify a DSP: ids (`fx-1`, ...) repeat
+ *      across sessions, an undone code edit keeps its id, and a sample-rate
+ *      change replaces the AudioContext. A runtime is therefore reused only
+ *      while it is *current*: same Faust code, node in the live context.
  *
  *****************************************************************************/
 import type { FxEffectId } from "../../src/domain/fx-chain.js";
@@ -14,9 +18,39 @@ export type FxEffectRuntime = {
   node: AudioWorkletNode | null;
   generator: any | null;
   ui: any[] | null;
+  /** Faust source the node was compiled from (absent: unknown, never current). */
+  code?: string;
 };
 
 const effectRuntimes = new Map<FxEffectId, FxEffectRuntime>();
+
+/**
+ * Purpose: Decide whether a compiled runtime still implements `code` in `audioContext`.
+ * How: Same source text, and a node created by that very context, which must not be closed.
+ */
+export function isEffectRuntimeCurrent(
+  runtime: FxEffectRuntime,
+  code: string,
+  audioContext: BaseAudioContext,
+): boolean {
+  return runtime.code === code
+    && runtime.node !== null
+    && runtime.node.context === audioContext
+    && audioContext.state !== "closed";
+}
+
+/**
+ * Purpose: True iff `effectId` has a runtime that can be reused for `code` in `audioContext`.
+ * How: Look the runtime up and apply `isEffectRuntimeCurrent`.
+ */
+export function hasCurrentEffectRuntime(
+  effectId: FxEffectId,
+  code: string,
+  audioContext: BaseAudioContext,
+): boolean {
+  const runtime = effectRuntimes.get(effectId);
+  return runtime !== undefined && isEffectRuntimeCurrent(runtime, code, audioContext);
+}
 
 /**
  * Purpose: Compile one Faust DSP source and create a live AudioWorkletNode.
@@ -30,15 +64,19 @@ export async function compileFxEffect(
   audioContext: AudioContext,
 ): Promise<FxEffectRuntime> {
   const existing = effectRuntimes.get(effectId);
-  if (existing) {
+  if (existing && isEffectRuntimeCurrent(existing, code, audioContext)) {
     return existing;
   }
 
   return queueFaustCompilation(async ({ compiler, createGenerator }) => {
     // Re-check after waiting — another caller may have compiled this effect.
     const existingAfterWait = effectRuntimes.get(effectId);
-    if (existingAfterWait) {
+    if (existingAfterWait && isEffectRuntimeCurrent(existingAfterWait, code, audioContext)) {
       return existingAfterWait;
+    }
+    if (audioContext.state === "closed") {
+      // The context was replaced (sample-rate change) while this compilation waited.
+      throw new Error(`"${name}": audio context closed before compilation`);
     }
 
     console.log(`[faust] Compiling "${name}"…`);
@@ -73,8 +111,11 @@ export async function compileFxEffect(
       node,
       generator,
       ui,
+      code,
     };
 
+    // Replace a stale runtime (other code or other context): release its node first.
+    destroyEffectRuntime(effectId);
     effectRuntimes.set(effectId, runtime);
     return runtime;
   });
@@ -110,6 +151,18 @@ export function destroyEffectRuntime(effectId: FxEffectId): void {
     }
   }
   effectRuntimes.delete(effectId);
+}
+
+/**
+ * Purpose: Release the runtimes of effects that no longer exist (another session was loaded).
+ * How: Destroy every runtime whose effect id is not in `keep`.
+ */
+export function retainEffectRuntimes(keep: ReadonlySet<FxEffectId>): void {
+  for (const effectId of [...effectRuntimes.keys()]) {
+    if (!keep.has(effectId)) {
+      destroyEffectRuntime(effectId);
+    }
+  }
 }
 
 /**

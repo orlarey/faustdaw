@@ -123,6 +123,7 @@ import {
   getFirstDspFile,
 } from "./fx-chain/faust-resource.js";
 import { wireTransformPanel, recompileTransformChainEffects } from "./faust-transform/faust-transform-panel.js";
+import { retainEffectRuntimes } from "./fx-chain/fx-chain-runtime.js";
 import { wireFaustEditor } from "./faust-editor/faust-editor.js";
 import { applyClipMagnetism } from "./magnetism.js";
 import { resolveClipAlignmentTarget } from "./placement.js";
@@ -1414,6 +1415,12 @@ async function applyLoadedSessionArchive(
     pushRenderLog(options.successLogMessage);
   }
   render(elements);
+  // Release the compiled effects of the previous session; those whose id is
+  // reused are kept only while current (same code, live context).
+  retainEffectRuntimes(new Set([
+    ...[...demoState.project.chains.values()].flatMap((chain) => chain.effects.map((effect) => effect.id)),
+    ...demoState.transformChain.map((effect) => effect.id),
+  ]));
   startRecompilation(elements);
   void recompileTransformChainEffects(elements);
   void refreshSessionWorkspaceControls(elements);

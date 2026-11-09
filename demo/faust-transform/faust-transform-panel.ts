@@ -42,6 +42,7 @@ import {
   compileFxEffect,
   getEffectRuntime,
   destroyEffectRuntime,
+  hasCurrentEffectRuntime,
 } from "../fx-chain/fx-chain-runtime.js";
 import { ensureFaustCompiler } from "../fx-chain/faust-compiler.js";
 import { captureEffectParameters, restoreEffectParameters } from "../fx-chain/fx-chain-audio.js";
@@ -1009,10 +1010,17 @@ export async function recompileTransformChainEffects(_elements: Elements): Promi
   if (!audioContext) return;
 
   for (const effect of demoState.transformChain) {
-    if (getEffectRuntime(effect.id)) continue;
     const name = getEffectName(effect);
     const code = demoState.project.fxResources.get(effect.fxResourceId)?.code ?? "";
     if (!code) continue;
+    // Reuse only a current runtime (same code, live context); ids repeat across sessions.
+    if (hasCurrentEffectRuntime(effect.id, code, audioContext)) {
+      const node = getEffectRuntime(effect.id)?.node;
+      if (node && effect.parameters.length > 0) {
+        restoreEffectParameters(node, effect.parameters);
+      }
+      continue;
+    }
     try {
       await compileFxEffect(effect.id, name, code, audioContext);
       const runtime = getEffectRuntime(effect.id);

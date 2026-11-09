@@ -18,7 +18,8 @@ import { demoState } from "../state.js";
  *      During Transform Preview, the track containing the previewed clip uses the Transform
  *      Chain instead of its own effects — track effects are bypassed.
  *      Before wiring, every candidate effect node is disconnected so rewires after a reorder
- *      don't leave stale edges behind (those would form feedback loops).
+ *      don't leave stale edges behind (those would form feedback loops). A runtime whose node
+ *      belongs to another AudioContext is skipped (connect would throw).
  */
 export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outputNode: GainNode): void {
   // During Transform Preview, replace the target track's effects with Transform Chain
@@ -33,7 +34,7 @@ export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outp
       for (const effect of demoState.transformChain) {
         if (effect.bypassed) continue;
         const runtime = getEffectRuntime(effect.id);
-        if (!runtime?.node) continue;
+        if (!runtime?.node || runtime.node.context !== inputNode.context) continue;
         currentNode.connect(runtime.node);
         currentNode = runtime.node;
       }
@@ -57,7 +58,9 @@ export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outp
       continue;
     }
     const runtime = getEffectRuntime(effect.id);
-    if (!runtime?.node) {
+    // A node of another context (replaced after a sample-rate change, not yet
+    // recompiled) cannot be connected: pass through until it is recompiled.
+    if (!runtime?.node || runtime.node.context !== inputNode.context) {
       continue;
     }
     currentNode.connect(runtime.node);

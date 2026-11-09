@@ -19,7 +19,7 @@ import {
   updateEffectParamValue,
 } from "../../src/fx-chain.js";
 import { demoState } from "../state.js";
-import { compileFxEffect, getEffectRuntime, destroyEffectRuntime } from "./fx-chain-runtime.js";
+import { compileFxEffect, getEffectRuntime, destroyEffectRuntime, hasCurrentEffectRuntime } from "./fx-chain-runtime.js";
 import { captureEffectParameters, restoreEffectParameters } from "./fx-chain-audio.js";
 import {
   getEffectName,
@@ -217,6 +217,19 @@ export async function compileAndAttachEffect(
     return;
   }
   const runtime = await compileFxEffect(effect.id, name, code, audioContext);
+  // The project may have changed while compiling (session load, undo/redo):
+  // only touch an effect that still exists with this code, and take the saved
+  // values from it now, not from the snapshot this call started with.
+  const currentTrack = demoState.project.timeline.tracks.find((t) => t.id === targetTrackId);
+  const currentEffect = currentTrack
+    ? demoState.project.chains.get(currentTrack.chainId)?.effects.find((e) => e.id === effect.id)
+    : undefined;
+  if (!currentEffect || getEffectCode(currentEffect) !== code) {
+    return;
+  }
+  if (savedParameters !== null) {
+    savedParameters = currentEffect.parameters;
+  }
   if (runtime.node) {
     // Capture parameter metadata (min/max/step/label/default) from the compiled node.
     // Note: values read from the node are unreliable (Faust uses setValueAtTime which
@@ -242,50 +255,71 @@ export async function compileAndAttachEffect(
 // Session restore — recompile all effects
 // ---------------------------------------------------------------------------
 
-// Guard flag to prevent recompileAllSessionEffects reentrance.
-let recompilationInProgress = false;
+// The running recompilation, and whether another pass was requested meanwhile
+// (a session load or an undo while effects of the previous state compile).
+let recompilationLoop: Promise<void> | null = null;
+let recompilationRequested = false;
 
 /**
- * Purpose: Recompile all effects that lack a runtime after session restore or undo/redo.
- * How: Loop over every uncompiled effect and delegate to compileAndAttachEffect with saved params.
+ * Purpose: Make every effect of the project run its current code in the live
+ *          AudioContext, after a session load, an undo/redo or a chain op.
+ * How: Recompile each effect whose runtime is missing or stale (other code,
+ *      other context: `hasCurrentEffectRuntime`); push the document's saved
+ *      parameters onto the reused ones. A call made while a pass runs queues
+ *      one more pass on the then-current project and returns the running loop,
+ *      so effects of a newly loaded session are never skipped.
  */
-export async function recompileAllSessionEffects(elements: Elements): Promise<void> {
-  if (recompilationInProgress) {
-    return;
+export function recompileAllSessionEffects(elements: Elements): Promise<void> {
+  if (recompilationLoop) {
+    recompilationRequested = true;
+    return recompilationLoop;
   }
-  const allEffects: { trackId: TrackId; effect: FxEffect }[] = [];
-  for (const track of demoState.project.timeline.tracks) {
-    const chain = demoState.project.chains.get(track.chainId);
-    if (!chain) continue;
-    for (const effect of chain.effects) {
-      if (!getEffectRuntime(effect.id)) {
-        allEffects.push({ trackId: track.id as TrackId, effect });
+  recompilationLoop = (async () => {
+    let compiledCount = 0;
+    do {
+      recompilationRequested = false;
+      const audioContext = demoState.audio.ensureContext();
+      if (!audioContext) {
+        return;
       }
-    }
-  }
-  if (allEffects.length === 0) {
-    return;
-  }
-  recompilationInProgress = true;
-  let compiledCount = 0;
-  try {
-    console.log(`[faust] Recompiling ${allEffects.length} effect(s) from restored session…`);
-    for (const { trackId, effect } of allEffects) {
-      try {
-        const savedParams = effect.parameters.length > 0 ? effect.parameters : null;
-        await compileAndAttachEffect(effect, trackId, elements, savedParams);
-        compiledCount++;
-      } catch (error) {
-        console.warn(`[faust] Failed to recompile "${getEffectName(effect)}":`, error);
+      const staleEffects: { trackId: TrackId; effect: FxEffect }[] = [];
+      for (const track of demoState.project.timeline.tracks) {
+        const chain = demoState.project.chains.get(track.chainId);
+        if (!chain) continue;
+        for (const effect of chain.effects) {
+          if (hasCurrentEffectRuntime(effect.id, getEffectCode(effect), audioContext)) {
+            // Reused node (e.g. same id and code in the session just loaded):
+            // the document's values are the truth (every write mirrors into it).
+            const node = getEffectRuntime(effect.id)?.node;
+            if (node && effect.parameters.length > 0) {
+              restoreEffectParameters(node, effect.parameters);
+            }
+          } else {
+            staleEffects.push({ trackId: track.id as TrackId, effect });
+          }
+        }
       }
+      if (staleEffects.length > 0) {
+        console.log(`[faust] Recompiling ${staleEffects.length} effect(s) from restored session…`);
+      }
+      for (const { trackId, effect } of staleEffects) {
+        try {
+          const savedParams = effect.parameters.length > 0 ? effect.parameters : null;
+          await compileAndAttachEffect(effect, trackId, elements, savedParams);
+          compiledCount++;
+        } catch (error) {
+          console.warn(`[faust] Failed to recompile "${getEffectName(effect)}":`, error);
+        }
+      }
+    } while (recompilationRequested);
+    // Refresh the FX panel UI only if at least one effect was compiled
+    if (compiledCount > 0 && demoState.activeFxTrackId && syncFxPanelListRef) {
+      syncFxPanelListRef(elements);
     }
-  } finally {
-    recompilationInProgress = false;
-  }
-  // Refresh the FX panel UI only if at least one effect was compiled
-  if (compiledCount > 0 && demoState.activeFxTrackId && syncFxPanelListRef) {
-    syncFxPanelListRef(elements);
-  }
+  })().finally(() => {
+    recompilationLoop = null;
+  });
+  return recompilationLoop;
 }
 
 /**
