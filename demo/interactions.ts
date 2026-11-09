@@ -3361,7 +3361,14 @@ export function wireEvents(elements: Elements): void {
   elements.tutorialOverlayBackdrop.addEventListener("click", closeTutorialOverlay);
   elements.tutorialOverlayClose.addEventListener("click", closeTutorialOverlay);
 
+  // A Play waits for the audio engine (resume, or a Stop's pending suspend)
+  // before the transport becomes Playing; a click meanwhile means Stop.
+  let pendingPlayStart: { cancelled: boolean } | null = null;
   const toggleTransportPlayback = async (): Promise<void> => {
+    if (pendingPlayStart) {
+      pendingPlayStart.cancelled = true;
+      return;
+    }
     if (demoState.project.timeline.transport === "Playing") {
       // If exporting, cancel the export on Play click.
       if (demoState.realtimeExport) {
@@ -3375,8 +3382,14 @@ export function wireEvents(elements: Elements): void {
       applyTransition("Stop", () => stop(demoState.project), elements);
       return;
     }
+    const attempt = { cancelled: false };
+    pendingPlayStart = attempt;
     try {
       await demoState.audio.startSilent();
+      if (attempt.cancelled) {
+        demoState.audio.stopSilent();
+        return;
+      }
       demoState.playSelection.clipFilter = null;
       demoState.playSelection.loopRange = null;
       demoState.clipRenderStable.dirty = true;
@@ -3392,6 +3405,10 @@ export function wireEvents(elements: Elements): void {
       const message = error instanceof Error ? error.message : String(error);
       pushRenderLog(`ERROR: ${message}`);
       render(elements);
+    } finally {
+      if (pendingPlayStart === attempt) {
+        pendingPlayStart = null;
+      }
     }
   };
 

@@ -37,6 +37,12 @@ export type RealtimeExportState = {
  *      On stop — disconnect the capture node, assemble chunks into a WAV blob, and trigger a download.
  */
 export function toggleRealtimeExport(elements: Elements): void {
+  if (pendingExportStart) {
+    // A click while the export waits for the audio engine cancels it, as a
+    // click on "Stop Export" would: never start a second, orphan capture.
+    pendingExportStart.cancelled = true;
+    return;
+  }
   if (demoState.realtimeExport) {
     finishRealtimeExport(elements);
     return;
@@ -44,13 +50,28 @@ export function toggleRealtimeExport(elements: Elements): void {
   void startRealtimeExport(elements);
 }
 
+// The export start waiting for the audio engine, if any.
+let pendingExportStart: { cancelled: boolean } | null = null;
+
 async function startRealtimeExport(elements: Elements): Promise<void> {
   if (demoState.project.timeline.transport === "Playing") {
     demoState.transportLoop.stop(elements);
     applyTransition("Stop", () => stop(demoState.project), elements);
   }
 
-  await demoState.audio.startSilent();
+  const attempt = { cancelled: false };
+  pendingExportStart = attempt;
+  try {
+    await demoState.audio.startSilent();
+  } finally {
+    pendingExportStart = null;
+  }
+  if (attempt.cancelled) {
+    demoState.audio.stopSilent();
+    pushRenderLog("Export cancelled");
+    render(elements);
+    return;
+  }
 
   const audioContext = demoState.audio.context;
   if (!audioContext) {
@@ -87,7 +108,19 @@ async function startRealtimeExport(elements: Elements): Promise<void> {
 
   demoState.lastPlayStartCoord = demoState.project.timeline.cursor;
   demoState.project = play(demoState.project);
-  demoState.playbackSession.start();
+  try {
+    demoState.playbackSession.start();
+  } catch (error) {
+    // Same rule as Play: never leave a capture node or a Playing transport behind.
+    scriptNode.onaudioprocess = null;
+    scriptNode.disconnect();
+    try { masterGain.disconnect(scriptNode); } catch { /* already disconnected */ }
+    demoState.realtimeExport = null;
+    demoState.transportLoop.abortFailedPlay(elements);
+    pushRenderLog(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    render(elements);
+    return;
+  }
   demoState.transportLoop.startIfNeeded(elements);
 
   elements.exportMixdownButton.textContent = "Stop Export";
