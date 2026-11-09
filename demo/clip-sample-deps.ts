@@ -17,7 +17,7 @@
 import type { ClipSampleDeps } from "../src/domain/clip-operations.js";
 import { importAudioResource, type AudioResource } from "../src/domain/audio-resource.js";
 import { demoState, type ImportedResourceSource } from "./state.js";
-import { audioBufferToWavBytes } from "./session-archive.js";
+import { audioBufferToFloatWavBytes } from "./session-archive.js";
 import { buildWaveformPyramid } from "./waveform.js";
 
 function createGeneratedWavResourceSource(
@@ -81,7 +81,9 @@ export function makeClipSampleDeps(): ClipSampleDeps {
         demoState.resources.audioBuffers.set(resourceId, buffer);
         demoState.resources.sourceFiles.set(
           resourceId,
-          createGeneratedWavResourceSource(`${resourceId}.wav`, audioBufferToWavBytes(buffer)),
+          // Float WAV: the generated audio may exceed full scale (see
+          // audioBufferToFloatWavBytes); 16-bit would clip it on reload.
+          createGeneratedWavResourceSource(`${resourceId}.wav`, audioBufferToFloatWavBytes(buffer)),
         );
         demoState.resources.sessionRenders.delete(resourceId);
         demoState.resources.retainedIds.add(resourceId);

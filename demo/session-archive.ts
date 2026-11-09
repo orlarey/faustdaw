@@ -367,6 +367,76 @@ function decodeResourceMetadata(bytes: Uint8Array): SessionArchiveResourceMetada
   });
 }
 
+/** What the WAV encoders read from a buffer (an AudioBuffer satisfies it). */
+export type PcmBufferLike = Pick<AudioBuffer, "numberOfChannels" | "length" | "sampleRate" | "getChannelData">;
+
+/** WAVE_FORMAT_IEEE_FLOAT. */
+const WAVE_FORMAT_IEEE_FLOAT = 3;
+/** RIFF + fmt (18-byte body, cbSize 0) + fact + data headers. */
+const FLOAT_WAV_HEADER_SIZE_BYTES = 12 + (8 + 18) + (8 + 4) + 8;
+
+/**
+ * Purpose: Encode audio the app generated (transform, reverse, merge,
+ *          crossfade, slice) without changing it, so it sounds the same
+ *          after a reload as before.
+ * How: 32-bit IEEE float WAV. Samples above full scale (a Faust gain,
+ *      a resonance, a distortion) are kept: a 16-bit encoding would clamp
+ *      them to ±1, and the reloaded clip would be hard-clipped. The fmt
+ *      chunk has the 18-byte form and a fact chunk follows it, as the WAVE
+ *      spec asks for non-PCM formats. Non-finite samples are written as 0.
+ */
+export function audioBufferToFloatWavBytes(buffer: PcmBufferLike): Uint8Array {
+  const channelCount = buffer.numberOfChannels;
+  const frameCount = buffer.length;
+  const bytesPerSample = 4;
+  const blockAlign = channelCount * bytesPerSample;
+  const dataByteLength = frameCount * blockAlign;
+  const wavBytes = new Uint8Array(FLOAT_WAV_HEADER_SIZE_BYTES + dataByteLength);
+  const view = new DataView(wavBytes.buffer);
+  const channelData = Array.from({ length: channelCount }, (_, channelIndex) => buffer.getChannelData(channelIndex));
+  let offset = 0;
+  const writeAscii = (value: string): void => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset++, value.charCodeAt(index));
+    }
+  };
+  const writeUint32 = (value: number): void => {
+    view.setUint32(offset, value, true);
+    offset += 4;
+  };
+  const writeUint16 = (value: number): void => {
+    view.setUint16(offset, value, true);
+    offset += 2;
+  };
+
+  writeAscii("RIFF");
+  writeUint32(wavBytes.length - 8);
+  writeAscii("WAVE");
+  writeAscii("fmt ");
+  writeUint32(18);
+  writeUint16(WAVE_FORMAT_IEEE_FLOAT);
+  writeUint16(channelCount);
+  writeUint32(buffer.sampleRate);
+  writeUint32(buffer.sampleRate * blockAlign);
+  writeUint16(blockAlign);
+  writeUint16(bytesPerSample * 8);
+  writeUint16(0);
+  writeAscii("fact");
+  writeUint32(4);
+  writeUint32(frameCount);
+  writeAscii("data");
+  writeUint32(dataByteLength);
+
+  for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+    for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+      const sample = channelData[channelIndex]![frameIndex]!;
+      view.setFloat32(offset, Number.isFinite(sample) ? sample : 0, true);
+      offset += bytesPerSample;
+    }
+  }
+  return wavBytes;
+}
+
 export function audioBufferToWavBytes(buffer: AudioBuffer): Uint8Array {
   const channelCount = buffer.numberOfChannels;
   const frameCount = buffer.length;

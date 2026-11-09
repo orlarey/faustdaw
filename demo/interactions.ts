@@ -143,6 +143,7 @@ import {
   withChainContentOf,
 } from "./session-document.js";
 import {
+  audioBufferToFloatWavBytes,
   audioBufferToWavBytes,
   parseSessionArchive,
   type LoadedSessionArchive,
@@ -2851,7 +2852,7 @@ export function wireEvents(elements: Elements): void {
       };
       const resourceSource = createGeneratedWavResourceSource(
         `${resourceId}.wav`,
-        audioBufferToWavBytes(resourceBuffer),
+        audioBufferToFloatWavBytes(resourceBuffer),
       );
       replacementClips.push(replacementClip);
       replacementClipIds.push(clipId);

@@ -16,7 +16,7 @@ import { demoState } from "./state.js";
 import type { SessionDocument } from "./session-document.js";
 import { createCurrentSessionDocument } from "./session-history.js";
 import {
-  audioBufferToWavBytes,
+  audioBufferToFloatWavBytes,
   buildSessionArchiveBytes,
   type SessionArchiveFxResource,
   type SessionRenderResourceLink,
@@ -91,7 +91,8 @@ export function getArchiveResourcePayload(resourceId: string): ArchiveResourcePa
     fileName: `${resourceId}.wav`,
     mimeType: "audio/wav",
     lastModified: 0,
-    fileBytes: audioBufferToWavBytes(audioBuffer),
+    // No source bytes: encode the buffer losslessly (float WAV).
+    fileBytes: audioBufferToFloatWavBytes(audioBuffer),
     sessionRender,
   };
 }
