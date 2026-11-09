@@ -127,7 +127,7 @@ Routage clavier : les gestionnaires de scope sont des écouteurs `keydown` en ca
 
 1. **Refactor du monolithique en diff-par-scope** sur le project document : transformer `commitCurrentSessionDocumentChange` en plusieurs piles, chacune scopée à sa slice. Cela couvre les niveaux 0, 1, 2 et 2b en une fois.
 2. **Library scope (3b)** : fait, par effet (voir l'audit). Reste, reporté : ne plus vider la pile d'une vue sur un changement extérieur sans rapport (modification de `faust-orbit-ui`).
-3. **Migration `codeHash` → `uiHash`** sur le système de presets (`preset-storage`, `preset-tracking`, panels, calque, menu de rappel) — préalable indispensable pour que les scopes 2b et 3b aient la stabilité voulue face aux édits de code n'affectant pas l'UI. Indépendant de la mécanique d'undo elle-même mais conditionne sa correction.
+3. **Migration `codeHash` → `uiHash`** sur le système de presets : faite. Les presets sont stockés et recherchés par `uiHash` (`listPresetsByUIHash`, `preset-storage.ts`) ; `codeHash` ne sert plus qu'aux trajectoires, volontairement, pour qu'une trajectoire reste liée au code qui l'a produite.
 4. **Décision sur 2b orbit-ui** : si on undo le viewport / la sélection, créer un scope minimal ; sinon accepter que ce sont des transients hors-undo.
 5. **Composition pour Cmd+Z** : routage par focus. Le scope focusé consomme le keystroke même s'il est vide — pas de fall-through vers le parent. Le contrat « ce que dit le footer = ce que Cmd+Z affecte » prime sur la commodité d'enchaîner des annulations à travers la hiérarchie. Applique les règles 1 (indépendance), 2 (persistance), 7 (bifurcation locale), 8 (politique de branches).
 
