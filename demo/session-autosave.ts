@@ -27,6 +27,7 @@ import {
 } from "./session-view-state.js";
 import { saveWorkingSessionViewState } from "./session-workspace.js";
 import { normalizeErrorMessage } from "./error-message.js";
+import { SerialSaver } from "./serial-saver.js";
 
 
 const WORKING_SESSION_AUTOSAVE_DELAY_MS = 400;
@@ -36,9 +37,13 @@ const SESSION_VIEW_STATE_AUTOSAVE_INTERVAL_MS = 1_500;
 // Module-private state
 // ---------------------------------------------------------------------------
 
-let workingSessionAutosaveTimeoutId: number | null = null;
-let workingSessionAutosavePromise: Promise<void> | null = null;
-let workingSessionAutosaveQueued = false;
+// Debounced, single-flight saves of the working session archive (serial-saver.ts).
+const workingSessionSaver = new SerialSaver<Elements>(
+  (elements) => persistWorkingSessionArchiveNow(elements),
+  WORKING_SESSION_AUTOSAVE_DELAY_MS,
+  { setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs), clearTimeout: (id) => window.clearTimeout(id) },
+  (error) => console.warn("[webdaw] working-session autosave failed", normalizeErrorMessage(error)),
+);
 let sessionViewStateAutosavePromise: Promise<void> | null = null;
 let sessionViewStateAutosaveIntervalId: number | null = null;
 let lastPersistedSessionViewState: SessionViewState | null = null;
@@ -50,85 +55,29 @@ let lastPersistedSessionViewStateSessionId: string | null = null;
 
 /**
  * Purpose: Schedule a debounced autosave of the working session archive.
- * How: Replace any pending timeout; after the delay, hand off to
- *      `runWorkingSessionAutosave`, which queues one more pass if a save is
- *      already in flight.
+ * How: Delegate to the serial saver: the timer replaced, at most one save in
+ *      flight, one more pass queued if an edit comes while one runs.
  */
 export function scheduleWorkingSessionAutosave(elements?: Elements): void {
-  if (workingSessionAutosaveTimeoutId !== null) {
-    window.clearTimeout(workingSessionAutosaveTimeoutId);
-  }
-  workingSessionAutosaveTimeoutId = window.setTimeout(() => {
-    workingSessionAutosaveTimeoutId = null;
-    runWorkingSessionAutosave(elements).catch((error) => {
-      console.warn("[webdaw] working-session autosave failed", normalizeErrorMessage(error));
-    });
-  }, WORKING_SESSION_AUTOSAVE_DELAY_MS);
+  workingSessionSaver.schedule(elements);
 }
 
 /**
- * Purpose: Single entry point for every working-session archive save, so at
- *          most one save is in flight and the last one always captures the
- *          newest state.
- * How: If a save is running, flag one more pass and return the running loop.
- *      Otherwise start the loop; the returned promise settles with the first
- *      pass (so callers see its error), while queued passes keep draining in
- *      the tracked loop.
+ * Purpose: Save a pending edit now (session switch, blur, pagehide).
+ * How: The serial saver's flush: one more pass if a save is running and an
+ *      edit was pending; otherwise one save, when the session is in the
+ *      workspace.
  */
-function runWorkingSessionAutosave(elements?: Elements): Promise<void> {
-  if (workingSessionAutosavePromise) {
-    workingSessionAutosaveQueued = true;
-    return workingSessionAutosavePromise;
-  }
-  workingSessionAutosaveQueued = false;
-  const firstPass = persistWorkingSessionArchiveNow(elements);
-  workingSessionAutosavePromise = (async () => {
-    try {
-      await firstPass;
-    } catch {
-      // Reported by the caller of runWorkingSessionAutosave.
-    }
-    while (workingSessionAutosaveQueued) {
-      workingSessionAutosaveQueued = false;
-      try {
-        await persistWorkingSessionArchiveNow(elements);
-      } catch (error) {
-        console.warn("[webdaw] working-session autosave failed", normalizeErrorMessage(error));
-      }
-    }
-  })().finally(() => {
-    workingSessionAutosavePromise = null;
-  });
-  return firstPass;
-}
-
 export async function flushPendingWorkingSessionAutosave(elements?: Elements): Promise<void> {
-  const hadPendingEdit = workingSessionAutosaveTimeoutId !== null;
-  if (workingSessionAutosaveTimeoutId !== null) {
-    window.clearTimeout(workingSessionAutosaveTimeoutId);
-    workingSessionAutosaveTimeoutId = null;
-  }
-  if (workingSessionAutosavePromise) {
-    // The in-flight save snapshotted its state before the pending edit:
-    // request one more pass and wait for the whole loop to drain.
-    if (hadPendingEdit) {
-      workingSessionAutosaveQueued = true;
-    }
-    await workingSessionAutosavePromise;
-    return;
-  }
-  if (!demoState.session.inWorkspace) {
-    return;
-  }
-  await runWorkingSessionAutosave(elements);
+  await workingSessionSaver.flush(() => demoState.session.inWorkspace, elements);
 }
 
 /**
  * Purpose: True iff an autosave is debounced or in flight.
- * How: Check both the timeout handle and the in-flight promise.
+ * How: Ask the serial saver.
  */
 export function isWorkingSessionAutosavePending(): boolean {
-  return workingSessionAutosaveTimeoutId !== null || workingSessionAutosavePromise !== null;
+  return workingSessionSaver.pending;
 }
 
 /**
@@ -137,17 +86,7 @@ export function isWorkingSessionAutosavePending(): boolean {
  *      is about to be removed.
  */
 export async function cancelWorkingSessionAutosave(): Promise<void> {
-  if (workingSessionAutosaveTimeoutId !== null) {
-    window.clearTimeout(workingSessionAutosaveTimeoutId);
-    workingSessionAutosaveTimeoutId = null;
-  }
-  if (workingSessionAutosavePromise) {
-    try {
-      await workingSessionAutosavePromise;
-    } catch {
-      // Ignore autosave failures during close.
-    }
-  }
+  await workingSessionSaver.cancel();
 }
 
 // ---------------------------------------------------------------------------

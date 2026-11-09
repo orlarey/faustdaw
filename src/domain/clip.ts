@@ -69,6 +69,20 @@ export function clipEnd(project: Project, clip: Clip): TimeCoord {
   return clip.start + durationCoord;
 }
 
+/**
+ * Purpose: Return the resource frame a clip reads at a given timeline time (the playback offset).
+ * How: Convert the elapsed coordinates since the clip start to resource frames, exactly in
+ *      integers: Δ coords last Δ / internalTimeRate seconds, hence ⌊Δ · sampleRate / internalTimeRate⌋
+ *      frames of the resource (coords equal frames only when internalTimeFactor = 1 and the
+ *      resource rate is the project rate); a time before the start reads the first frame. Add
+ *      the source start of the slice.
+ */
+export function clipSourceFrameAt(project: Project, clip: Clip, time: TimeCoord): number {
+  const elapsed = Math.max(time - clip.start, 0);
+  return getClipSourceStartSample(clip)
+    + Math.floor((elapsed * clip.resource.sampleRate) / project.timebase.internalTimeRate);
+}
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@
  *      move, start, stop, tick, and observe the timeline. Delegate
  *      per-clip activity questions to the Clip concept.
  */
-import { findActiveClipInTrack, getClipSourceStartSample } from "./clip.js";
+import { clipSourceFrameAt, findActiveClipInTrack } from "./clip.js";
 import type { Output, SignalOutput } from "./output.js";
 import type { Project } from "./project.js";
 import { assertValidProject } from "./project.js";
@@ -128,8 +128,7 @@ export function observeOutput(project: Project): Output {
     signals.push({
       clipId: clip.id,
       resourceId: clip.resource.id,
-      offset: getClipSourceStartSample(clip)
-        + Math.floor(((project.timeline.cursor - clip.start) * clip.resource.sampleRate) / project.timebase.internalTimeRate),
+      offset: clipSourceFrameAt(project, clip, project.timeline.cursor),
       trackId: track.id,
     });
   }

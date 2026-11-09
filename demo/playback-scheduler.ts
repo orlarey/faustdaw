@@ -17,7 +17,7 @@
  *
  ******************************************************************************/
 import type { Project } from "../src/domain/project.js";
-import { clipEnd, getClipSourceStartSample } from "../src/domain/clip.js";
+import { clipEnd, clipSourceFrameAt } from "../src/domain/clip.js";
 import { TRACK_IDS, type TrackId } from "../src/domain/track-id.js";
 import { demoState } from "./state.js";
 import { START_STOP_FADE_SECONDS } from "./audio-engine.js";
@@ -131,11 +131,8 @@ export class PlaybackScheduler {
         gain,
         startOffsetInPlan: effectiveStart - anchorTime,
         stopOffsetInPlan: effectiveStop - anchorTime,
-        // Timeline coords -> resource frames (exact integer conversion, PLAYERSPEC):
-        // coords equal frames only when internalTimeFactor === 1 (e.g. 48 kHz, not 44.1 kHz).
-        offsetInBufferFrames: getClipSourceStartSample(clip) + Math.floor(
-          (Math.max(effectiveStart - clip.start, 0) * clip.resource.sampleRate) / demoState.project.timebase.internalTimeRate,
-        ),
+        // Timeline coords -> resource frames (exact integer conversion, PLAYERSPEC).
+        offsetInBufferFrames: clipSourceFrameAt(demoState.project, clip, effectiveStart),
       });
       coveredUntil = Math.max(coveredUntil, effectiveStop);
     }
