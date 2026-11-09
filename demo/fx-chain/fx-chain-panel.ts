@@ -37,11 +37,10 @@ import {
 import { normalizeErrorMessage } from "../error-message.js";
 import { isFileDrag } from "../drag-predicates.js";
 import { presetTrackingSystem } from "../preset-tracking.js";
+import { OrbitLibrarySync } from "../preset-library-sync.js";
 import {
   computeCodeHash,
   listPresetsByUIHash,
-  savePreset,
-  deletePreset,
   loadTrajectory,
   saveTrajectory,
   type PresetRecord,
@@ -369,48 +368,6 @@ function adaptWebdawEventToOrbit(e: WebdawTrajectoryEvent): OrbitTrajectoryEvent
   return out;
 }
 
-/**
- * Purpose: Diff the OrbitUI library snapshot against IDB and apply the
- *          minimum set of writes (add / update / delete). Mirror of the
- *          helper in faust-transform-panel.ts — see comments there.
- */
-async function syncLibraryToIDB(
-  uiHash: string,
-  orbitRecords: readonly OrbitPreset[],
-): Promise<void> {
-  const existing = await listPresetsByUIHash(uiHash);
-  const existingByHash = new Map(existing.map((r) => [r.configHash, r]));
-  const incomingHashes = new Set<string>();
-
-  for (const record of orbitRecords) {
-    if (record.uiHash !== uiHash) continue;
-    incomingHashes.add(record.configHash);
-    const prev = existingByHash.get(record.configHash);
-    const firstSeenAt = prev?.firstSeenAt ?? record.lastSeenAt;
-    const next: PresetRecord = {
-      uiHash: record.uiHash,
-      configHash: record.configHash,
-      configuration: record.configuration,
-      firstSeenAt,
-      lastSeenAt: record.lastSeenAt,
-      ...(record.name !== undefined ? { name: record.name } : {}),
-    };
-    if (
-      !prev
-      || prev.lastSeenAt !== next.lastSeenAt
-      || prev.name !== next.name
-    ) {
-      await savePreset(next);
-    }
-  }
-  for (const old of existing) {
-    if (!incomingHashes.has(old.configHash)) {
-      await deletePreset(uiHash, old.configHash);
-    }
-  }
-  presetTrackingSystem.notifyLibraryChange(uiHash);
-}
-
 // ---------------------------------------------------------------------------
 // Refresh helper for external callers (e.g. grid drop handler)
 // ---------------------------------------------------------------------------
@@ -438,6 +395,7 @@ export function wireFxPanel(elements: Elements, context: FxPanelContext): void {
     instance: OrbitUIType;
     bridge: FxChainGestureBridge;
     codeHash: string;
+    librarySync: OrbitLibrarySync;
   };
   const activeOrbitInstances = new Map<string, OrbitInstanceEntry>();
 
@@ -453,7 +411,10 @@ export function wireFxPanel(elements: Elements, context: FxPanelContext): void {
     if (matches.length === 0) return;
     const records = await listPresetsByUIHash(uiHash);
     const orbitRecords = records.map(adaptWebdawPresetToOrbit);
-    for (const entry of matches) entry.instance.setLibrary(orbitRecords);
+    for (const entry of matches) {
+      entry.librarySync.markSynced(orbitRecords);
+      entry.instance.setLibrary(orbitRecords);
+    }
   });
 
   async function loadOrbitUI(): Promise<{ new (root: HTMLElement, opts: any): OrbitUIType }> {
@@ -569,13 +530,16 @@ export function wireFxPanel(elements: Elements, context: FxPanelContext): void {
           const effectCode = getEffectCode(effect) ?? "";
           const codeHash = await computeCodeHash(effectCode);
 
+          // Writes only this instance's changes to the shared preset store
+          // (other tabs write to it too): see preset-library-sync.ts.
+          let librarySync: OrbitLibrarySync | null = null;
           const orbit = new OrbitUI(container, {
             uiDescriptor: runtime.ui,
             onParamChange: (path: string, value: number) => bridge.setParam(path, value),
             onInteractionStart: () => bridge.begin(),
             onInteractionEnd: () => bridge.end(),
             onLibraryChange: (records: readonly OrbitPreset[]) => {
-              void syncLibraryToIDB(orbit.uiHash, records);
+              void librarySync?.push(records);
             },
             onTrajectoryChange: (record: OrbitTrajectoryRecord) => {
               const webdaw: WebdawTrajectoryRecord = {
@@ -591,6 +555,7 @@ export function wireFxPanel(elements: Elements, context: FxPanelContext): void {
             },
           });
           instance = orbit;
+          librarySync = new OrbitLibrarySync(orbit.uiHash);
 
           // Expose the uiHash on the container for the global Cmd+Z router
           // (preset-library-undo / faust-fx-undo read this attribute to
@@ -607,7 +572,7 @@ export function wireFxPanel(elements: Elements, context: FxPanelContext): void {
             orbit.setParams(currentValues);
           }
 
-          activeOrbitInstances.set(effect.id, { instance: orbit, bridge, codeHash });
+          activeOrbitInstances.set(effect.id, { instance: orbit, bridge, codeHash, librarySync });
           registerOrbitUI(effect.id, orbit);
 
           // Hydrate the library + trajectory from IDB. Trajectory is
@@ -620,7 +585,9 @@ export function wireFxPanel(elements: Elements, context: FxPanelContext): void {
               loadTrajectory(sessionId, effectId),
             ]);
             if (presets.length > 0) {
-              orbit.setLibrary(presets.map(adaptWebdawPresetToOrbit));
+              const orbitPresets = presets.map(adaptWebdawPresetToOrbit);
+              librarySync.markSynced(orbitPresets);
+              orbit.setLibrary(orbitPresets);
             }
             if (traj && traj.codeHash === codeHash) {
               orbit.setTrajectory({
