@@ -73,6 +73,8 @@ export type SelectionRectState = {
   gridWidthPx: number;
   gridHeightPx: number;
   active: boolean;
+  /** Selection before the marquee started, restored when Escape cancels it. */
+  initialSelectedClipIds: readonly string[];
 };
 
 /**

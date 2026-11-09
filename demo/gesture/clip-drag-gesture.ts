@@ -579,6 +579,7 @@ export function wireClipDragging(elements: Elements): void {
         gridWidthPx: gridRect.width,
         gridHeightPx: gridRect.height,
         active: false,
+        initialSelectedClipIds: [...demoState.selection.ids],
       };
       syncSelectionRectangle(elements);
       elements.timelineGrid.setPointerCapture(event.pointerId);
@@ -839,27 +840,57 @@ export function wireClipDragging(elements: Elements): void {
   /**
    * Purpose: End a clip drag or a marquee without changing the document.
    * How: Stop auto-scroll, release the pointer capture, drop the gesture state
-   *      and redraw the clips at their committed positions.
+   *      and redraw the clips at their committed positions. On request (Escape),
+   *      a marquee also restores the selection it started from.
    */
-  const abortDrag = (event: PointerEvent): void => {
+  const cancelGesture = (pointerId: number, options: { restoreMarqueeSelection: boolean }): void => {
     stopClipAutoScroll();
-    if (elements.timelineGrid.hasPointerCapture(event.pointerId)) {
-      elements.timelineGrid.releasePointerCapture(event.pointerId);
+    if (elements.timelineGrid.hasPointerCapture(pointerId)) {
+      elements.timelineGrid.releasePointerCapture(pointerId);
     }
-    if (demoState.selectionRectState && event.pointerId === demoState.selectionRectState.pointerId) {
+    const selectionRectState = demoState.selectionRectState;
+    if (selectionRectState && pointerId === selectionRectState.pointerId) {
       clearSelectionRect();
+      if (options.restoreMarqueeSelection && setSelectedClipIds([...selectionRectState.initialSelectedClipIds])) {
+        renderFrame(elements);
+      }
       return;
     }
-    if (!demoState.dragState || event.pointerId !== demoState.dragState.pointerId) {
+    if (!demoState.dragState || pointerId !== demoState.dragState.pointerId) {
       return;
     }
     demoState.dragState = null;
     demoState.clipRenderStable.dirty = true;
     render(elements);
   };
+  const abortDrag = (event: PointerEvent): void => {
+    cancelGesture(event.pointerId, { restoreMarqueeSelection: false });
+  };
 
   elements.timelineGrid.addEventListener("pointerup", finishDrag);
   // pointercancel means the browser took the pointer away (touch scroll,
   // system gesture, lost capture): the user did not drop, so nothing moves.
   elements.timelineGrid.addEventListener("pointercancel", abortDrag);
+  // Escape cancels the drag or marquee in progress: the clips go back to
+  // their committed places (no move, no duplicate, no history entry) and a
+  // marquee restores the selection it started from. The rest of the press
+  // is then ignored (pointermove / pointerup find no gesture). Capture phase
+  // and stopImmediatePropagation: the key belongs to the gesture, it must
+  // not also close panels.
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      const pointerId = demoState.dragState?.pointerId ?? demoState.selectionRectState?.pointerId;
+      if (pointerId === undefined) {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cancelGesture(pointerId, { restoreMarqueeSelection: true });
+    },
+    { capture: true },
+  );
 }
