@@ -124,6 +124,7 @@ import {
   getFirstDspFile,
 } from "./fx-chain/faust-resource.js";
 import { wireTransformPanel, recompileTransformChainEffects } from "./faust-transform/faust-transform-panel.js";
+import { conformDecodedRenderLength, sessionRenderLengthAtRate } from "./session-render-resource.js";
 import { retainEffectRuntimes } from "./fx-chain/fx-chain-runtime.js";
 import { getFxResourceCodeStore, rememberFxResources, resetFxResourceCodeStore } from "./fx-resource-code-store.js";
 import { wireFaustEditor } from "./faust-editor/faust-editor.js";
@@ -1183,8 +1184,17 @@ async function materializeSessionRenderResource(
   }
 
   reportStatus(`Decoding "${transfer.fileName}"...`);
-  const decodedBuffer = await audioContext.decodeAudioData(transfer.wavBytes.slice().buffer);
-  ensureImportableDecodedSize(transfer.fileName, decodedBuffer);
+  const rawDecodedBuffer = await audioContext.decodeAudioData(transfer.wavBytes.slice().buffer);
+  ensureImportableDecodedSize(transfer.fileName, rawDecodedBuffer);
+  // The resource was declared at the project rate when dropped: the buffer
+  // must match it frame for frame (see session-render-resource.ts).
+  const resource = demoState.project.resources.get(resourceId);
+  if (resource && rawDecodedBuffer.sampleRate !== resource.sampleRate) {
+    throw new Error(
+      `Session render "${transfer.fileName}" decoded at ${rawDecodedBuffer.sampleRate} Hz, expected ${resource.sampleRate} Hz`,
+    );
+  }
+  const decodedBuffer = resource ? conformDecodedRenderLength(rawDecodedBuffer, resource.length) : rawDecodedBuffer;
   demoState.resources.audioBuffers.set(resourceId, decodedBuffer);
   demoState.resources.sourceFiles.set(resourceId, {
     fileName: transfer.fileName,
@@ -3181,11 +3191,14 @@ export function wireEvents(elements: Elements): void {
         const previousSessionDocument = createCurrentSessionDocument();
         const resourceId = createUniqueResourceId(`${getNormalizedProjectIdSlug(transfer.sourceSessionName)}-session`);
         const sessionRenderLink = getSessionRenderLinkFromTransfer(transfer);
+        // The render is decoded by this project's AudioContext, i.e. at the
+        // project rate: describe the resource at that rate, not the source's.
+        const projectSampleRate = demoState.project.timebase.sampleRate;
         const resource: AudioResource = {
           id: resourceId,
-          sampleRate: transfer.renderSampleRate,
+          sampleRate: projectSampleRate,
           channels: transfer.channelCount,
-          length: transfer.renderLengthSamples,
+          length: sessionRenderLengthAtRate(transfer.renderLengthSamples, transfer.renderSampleRate, projectSampleRate),
         };
         demoState.project = importAudioResource(demoState.project, resource);
         demoState.resources.sessionRenders.set(resource.id, sessionRenderLink);
