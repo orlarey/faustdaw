@@ -131,7 +131,11 @@ export class PlaybackScheduler {
         gain,
         startOffsetInPlan: effectiveStart - anchorTime,
         stopOffsetInPlan: effectiveStop - anchorTime,
-        offsetInBufferFrames: getClipSourceStartSample(clip) + Math.max(effectiveStart - clip.start, 0),
+        // Timeline coords -> resource frames (exact integer conversion, PLAYERSPEC):
+        // coords equal frames only when internalTimeFactor === 1 (e.g. 48 kHz, not 44.1 kHz).
+        offsetInBufferFrames: getClipSourceStartSample(clip) + Math.floor(
+          (Math.max(effectiveStart - clip.start, 0) * clip.resource.sampleRate) / demoState.project.timebase.internalTimeRate,
+        ),
       });
       coveredUntil = Math.max(coveredUntil, effectiveStop);
     }
@@ -322,6 +326,10 @@ export class PlaybackScheduler {
    */
   #stopTrackPlayers(): void {
     const outputGainsToDisconnect: GainNode[] = [];
+    // effectInputGain feeds the persistent FX nodes: without an explicit
+    // disconnect, each stop/restart would leave one more orphan GainNode
+    // attached to the first effect of the chain.
+    const effectInputGainsToDisconnect: GainNode[] = [];
     const outputPannersToDisconnect: StereoPannerNode[] = [];
     for (const trackPlayer of demoState.trackPlayers.values()) {
       if (trackPlayer.activePlan) {
@@ -338,6 +346,9 @@ export class PlaybackScheduler {
         trackPlayer.silentKeepAlive.disconnect();
         trackPlayer.silentKeepAlive = null;
       }
+      if (trackPlayer.effectInputGain) {
+        effectInputGainsToDisconnect.push(trackPlayer.effectInputGain);
+      }
       if (trackPlayer.outputGain) {
         outputGainsToDisconnect.push(trackPlayer.outputGain);
       }
@@ -345,8 +356,15 @@ export class PlaybackScheduler {
         outputPannersToDisconnect.push(trackPlayer.outputPanner);
       }
     }
-    if (outputGainsToDisconnect.length > 0 || outputPannersToDisconnect.length > 0) {
+    if (
+      effectInputGainsToDisconnect.length > 0
+      || outputGainsToDisconnect.length > 0
+      || outputPannersToDisconnect.length > 0
+    ) {
       window.setTimeout(() => {
+        for (const effectInputGain of effectInputGainsToDisconnect) {
+          effectInputGain.disconnect();
+        }
         for (const outputGain of outputGainsToDisconnect) {
           outputGain.disconnect();
         }

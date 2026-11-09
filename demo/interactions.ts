@@ -60,6 +60,8 @@ import {
   getSessionRenderAudioFileName,
 } from "./download.js";
 import { createNextClipId } from "./clip-id.js";
+import { clearChainUndoScopes } from "./chain-undo.js";
+import { clearFaustFxUndoScopes } from "./faust-fx-undo.js";
 import { canCurrentTabWriteSession } from "./session-permissions.js";
 import {
   cancelWorkingSessionAutosave,
@@ -1395,6 +1397,8 @@ async function applyLoadedSessionArchive(
   syncExactTimelineViewport(elements);
   demoState.session.historyPast = [...options.undoPast];
   demoState.session.historyFuture = [...options.undoFuture];
+  clearChainUndoScopes();
+  clearFaustFxUndoScopes();
   syncTrackVolumeViews(elements);
   syncSessionDragHandleState(elements);
   elements.clipContextMenu.hidden = true;
@@ -3188,7 +3192,7 @@ export function wireEvents(elements: Elements): void {
     const reportImportStatus = createImportStatusReporter(elements);
 
     try {
-      const previousSessionDocument = createCurrentSessionDocument();
+      const resourceIdsBeforeImport = new Set(demoState.project.resources.keys());
       const importedResource = await importAudioFile(
         {
           file: droppedAudioFile,
@@ -3197,6 +3201,21 @@ export function wireEvents(elements: Elements): void {
         undefined,
         elements,
         reportImportStatus,
+      );
+      // Snapshot after the (possibly long) decode so edits committed meanwhile
+      // keep their own undo entries; exclude the resource this drop just added.
+      let projectBeforeDrop = demoState.project;
+      if (!resourceIdsBeforeImport.has(importedResource.id)) {
+        const resources = new Map(projectBeforeDrop.resources);
+        resources.delete(importedResource.id);
+        projectBeforeDrop = { ...projectBeforeDrop, resources };
+      }
+      const previousSessionDocument = createSessionDocument(
+        projectBeforeDrop,
+        demoState.trackPlayers,
+        demoState.masterLevel,
+        demoState.clipOnsetAnnotations,
+        demoState.transformChain,
       );
       const clipId = createNextClipId();
       demoState.project = placeClip(demoState.project, clipId, importedResource, dropStart, dropTrackId);

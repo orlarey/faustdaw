@@ -70,6 +70,11 @@ function getClipEdgeScrollSpeed(): number {
   const leftZoneEndPx = demoState.dragState.gridLeftPx + EDGE_SCROLL_ZONE_PX;
   const rightZoneStartPx = demoState.dragState.gridRightPx - EDGE_SCROLL_ZONE_PX;
   if (demoState.dragState.lastPointerX >= rightZoneStartPx) {
+    // Mirror of the left branch (and of MarkerManager): only scroll once the
+    // pointer has actually moved rightwards, never on a stationary press.
+    if (demoState.dragState.lastNonZeroDeltaX <= 0) {
+      return 0;
+    }
     const intensity = Math.min((demoState.dragState.lastPointerX - rightZoneStartPx) / EDGE_SCROLL_ZONE_PX, 1);
     return demoState.viewport.getEdgeScrollMaxSpeed() * intensity * intensity;
   }
