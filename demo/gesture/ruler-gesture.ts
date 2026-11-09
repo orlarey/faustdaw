@@ -1,10 +1,20 @@
 /**************************** ruler-gesture.ts ********************************
  *
  * Purpose: Wire the pointer event cycle for ruler pan/zoom gestures, including
- *          inertia after release and the shift-click-to-seek shortcut.
+ *          the pan momentum while the pointer is held and the shift-click-to-seek
+ *          shortcut.
  * How: `wireRulerDragging(elements, ctx)` installs pointerdown / pointermove /
  *      pointerup / pointercancel handlers on the timeline ruler. The closure
- *      holds inertia state (animation frame id, velocities, dragging flag).
+ *      holds the momentum state (animation frame id, velocities, dragging flag).
+ *
+ *      Pan behaviour, as wanted (do not add an inertia after release):
+ *        - While the pointer is held (finger on the trackpad, button down), the
+ *          view follows the gesture's velocity; once the pointer stops moving,
+ *          the view keeps going on its momentum and slows down
+ *          (RULER_PAN_DRAG_DECAY_PER_MS), so a flick scrolls by itself as long
+ *          as the finger stays down.
+ *        - On release (or pointercancel), the view stops at once: the
+ *          remaining preview offset is committed and the momentum loop ends.
  *      One callback is injected:
  *        - restartPlaybackSessionIfNeeded: re-syncs the audio clock after a
  *          shift-click seek moves the cursor.
@@ -12,11 +22,7 @@
  ******************************************************************************/
 import type { Elements } from "../bind-elements.js";
 import { demoState } from "../state.js";
-import {
-  RULER_PAN_DRAG_DECAY_PER_MS,
-  RULER_PAN_INERTIA_DECAY_PER_MS,
-  RULER_PAN_INERTIA_MIN_VELOCITY_PX_PER_MS,
-} from "./gesture-state.js";
+import { RULER_PAN_DRAG_DECAY_PER_MS } from "./gesture-state.js";
 import { seek } from "../../src/domain/transport.js";
 import { snapCursorToNearestTertiaryDivision } from "../magnetism.js";
 import { recordPerfCounter } from "../perf.js";
@@ -46,7 +52,6 @@ export function wireRulerDragging(elements: Elements): void {
   let rulerPanMouseVelocityPxPerMs = 0;
   let rulerPanFrameTimestampMs: number | null = null;
   let rulerPanDragging = false;
-  let rulerPanInertiaFrameCount = 0;
 
   function logPanFrameGap(rawDeltaMs: number): void {
     if (!demoState.devFlags.perfLogging || demoState.rulerDragState?.mode !== "pan" || rawDeltaMs < PAN_DEBUG_FRAME_GAP_THRESHOLD_MS) {
@@ -57,7 +62,6 @@ export function wireRulerDragging(elements: Elements): void {
     console.debug("[pan-debug] frame-gap", {
       rawDeltaMs: Number(rawDeltaMs.toFixed(3)),
       dragging: rulerPanDragging,
-      inertiaFrameCount: rulerPanInertiaFrameCount,
       panPreviewOffsetPx: demoState.rulerDragState?.panPreviewOffsetPx ?? null,
       viewStartCoord: demoState.viewport.viewStartCoord,
       ...snapshot,
@@ -73,7 +77,6 @@ export function wireRulerDragging(elements: Elements): void {
     rulerPanMouseVelocityPxPerMs = 0;
     rulerPanFrameTimestampMs = null;
     rulerPanDragging = false;
-    rulerPanInertiaFrameCount = 0;
     resetRulerPanAccumulator();
   }
 
@@ -100,7 +103,17 @@ export function wireRulerDragging(elements: Elements): void {
     return true;
   }
 
+  /**
+   * Purpose: Advance the pan by one animation frame while the pointer is held.
+   * How: Decay the momentum velocity, take the pointer's velocity when it is
+   *      faster or reverses, move the preview offset, and commit it past the
+   *      threshold. The loop only runs during the gesture: the release stops it.
+   */
   function stepRulerPanMotion(timestampMs: number): void {
+    if (!rulerPanDragging) {
+      stopRulerPanMotion();
+      return;
+    }
     if (rulerPanFrameTimestampMs === null) {
       rulerPanFrameTimestampMs = timestampMs;
     }
@@ -109,15 +122,11 @@ export function wireRulerDragging(elements: Elements): void {
     const deltaMs = Math.min(rawDeltaMs, 32);
     rulerPanFrameTimestampMs = timestampMs;
     if (deltaMs > 0) {
-      const decayPerMs = rulerPanDragging ? RULER_PAN_DRAG_DECAY_PER_MS : RULER_PAN_INERTIA_DECAY_PER_MS;
-      rulerPanVelocityPxPerMs *= Math.exp(-decayPerMs * deltaMs);
-      rulerPanMouseVelocityPxPerMs *= Math.exp(-decayPerMs * deltaMs);
+      rulerPanVelocityPxPerMs *= Math.exp(-RULER_PAN_DRAG_DECAY_PER_MS * deltaMs);
+      rulerPanMouseVelocityPxPerMs *= Math.exp(-RULER_PAN_DRAG_DECAY_PER_MS * deltaMs);
       if (
-        rulerPanDragging
-        && (
-          Math.abs(rulerPanMouseVelocityPxPerMs) >= Math.abs(rulerPanVelocityPxPerMs)
-          || Math.sign(rulerPanMouseVelocityPxPerMs) !== Math.sign(rulerPanVelocityPxPerMs)
-        )
+        Math.abs(rulerPanMouseVelocityPxPerMs) >= Math.abs(rulerPanVelocityPxPerMs)
+        || Math.sign(rulerPanMouseVelocityPxPerMs) !== Math.sign(rulerPanVelocityPxPerMs)
       ) {
         rulerPanVelocityPxPerMs = rulerPanMouseVelocityPxPerMs;
       }
@@ -127,9 +136,6 @@ export function wireRulerDragging(elements: Elements): void {
           demoState.rulerDragState.panPreviewOffsetPx += deltaXPx;
         }
         const committed = commitRulerPanPreview(elements);
-        if (!rulerPanDragging) {
-          rulerPanInertiaFrameCount += 1;
-        }
         const previewOffsetPx = demoState.rulerDragState?.mode === "pan"
           ? demoState.rulerDragState.panPreviewOffsetPx
           : 0;
@@ -138,10 +144,6 @@ export function wireRulerDragging(elements: Elements): void {
           renderFrame(elements);
         }
       }
-    }
-    if (!rulerPanDragging && Math.abs(rulerPanVelocityPxPerMs) < RULER_PAN_INERTIA_MIN_VELOCITY_PX_PER_MS) {
-      stopRulerPanMotion();
-      return;
     }
     rulerPanFrameId = requestAnimationFrame((nextTimestampMs) => stepRulerPanMotion(nextTimestampMs));
   }
@@ -254,9 +256,6 @@ export function wireRulerDragging(elements: Elements): void {
       return;
     }
     const previousMode = demoState.rulerDragState.mode;
-    const previousX = demoState.rulerDragState.lastPointerX;
-    const previousY = demoState.rulerDragState.lastPointerY;
-    const previousTimestampMs = demoState.rulerDragState.lastPointerTimestampMs;
     demoState.rulerDragState.lastPointerX = event.clientX;
     demoState.rulerDragState.lastPointerY = event.clientY;
     demoState.rulerDragState.lastPointerTimestampMs = event.timeStamp;
@@ -265,22 +264,9 @@ export function wireRulerDragging(elements: Elements): void {
       if (previousMode !== "pan") {
         renderFrame(elements);
       }
-      rulerPanDragging = false;
-      const deltaMs = Math.max(event.timeStamp - previousTimestampMs, 1);
-      const releaseMouseVelocityPxPerMs = (event.clientX - previousX) / deltaMs;
-      if (Math.abs(releaseMouseVelocityPxPerMs) > 0.0001) {
-        rulerPanMouseVelocityPxPerMs = releaseMouseVelocityPxPerMs;
-      }
-      if (
-        Math.abs(rulerPanMouseVelocityPxPerMs) >= Math.abs(rulerPanVelocityPxPerMs)
-        || (
-          Math.abs(rulerPanMouseVelocityPxPerMs) > 0.0001
-          && Math.sign(rulerPanMouseVelocityPxPerMs) !== Math.sign(rulerPanVelocityPxPerMs)
-        )
-      ) {
-        rulerPanVelocityPxPerMs = rulerPanMouseVelocityPxPerMs;
-      }
-      ensureRulerPanMotion();
+      // Release stops the pan at once (no inertia after release, by design):
+      // the remaining preview offset is committed below, then the momentum
+      // loop is stopped.
     } else if (demoState.rulerDragState.mode === "zoom") {
       if (rulerZoomFrameId !== null) {
         cancelAnimationFrame(rulerZoomFrameId);
@@ -293,6 +279,9 @@ export function wireRulerDragging(elements: Elements): void {
       ? commitRulerPanPreview(elements, true)
       : false;
     demoState.rulerDragState = null;
+    if (finalMode === "pan") {
+      stopRulerPanMotion();
+    }
     demoState.geometryWindow.keepWarm = finalMode === "pan";
     TimelineScene.setPanPreviewOffset(elements, 0);
     if (elements.timelineRuler.hasPointerCapture(event.pointerId)) {

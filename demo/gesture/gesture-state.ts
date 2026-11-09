@@ -105,7 +105,10 @@ export const RULER_ZOOM_STEP_PX = 16;
 export const RULER_GESTURE_LOCK_PX = 10;
 export const RULER_ZOOM_STEP_FACTOR = 2 ** (1 / 4);
 export const RULER_PAN_COMMIT_THRESHOLD_PX = 160;
-export const RULER_PAN_INERTIA_MIN_VELOCITY_PX_PER_MS = 0.01;
-export const RULER_PAN_INERTIA_DECAY_PER_MS = 0.0015;
+/**
+ * Decay of the pan momentum while the ruler pointer is held (per ms): after a
+ * flick, the view keeps going and slows down with a time constant of ~0.29 s.
+ * There is no inertia after release: the pan stops when the pointer is lifted.
+ */
 export const RULER_PAN_DRAG_DECAY_PER_MS = 0.0035;
 export const RULER_PAN_DRAG_GAIN = 1.15;
