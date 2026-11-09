@@ -146,6 +146,15 @@ export function removeChainChangeListener(listener: ChainChangeListener): void {
   listeners.delete(listener);
 }
 
+/**
+ * Purpose: Notify the panels that a chain's content changed outside a chain op
+ *          (an effect's code restored by the faust-fx scope): they recompile,
+ *          rewire the track audio and refresh their list.
+ */
+export function notifyChainContentChanged(key: ChainScopeKey): void {
+  emitChainChanged(key);
+}
+
 function emitChainChanged(key: ChainScopeKey): void {
   for (const listener of listeners) {
     try {
@@ -284,7 +293,12 @@ export function wireChainUndoKeyboard(elements: Elements): void {
       // not fall through to the project scope. Strict isolation : the
       // footer label is the contract.
       event.preventDefault();
-      event.stopPropagation();
+      // stopImmediatePropagation, not stopPropagation: the other scope
+      // handlers are capture listeners on the same target (window), which
+      // stopPropagation does not stop. Applying the op can move the focus
+      // (the panel is rebuilt), and a later handler would then act on the
+      // same keystroke in another scope.
+      event.stopImmediatePropagation();
       const scope = getChainUndoScope(scopeKey);
       const isRedo = key === "y" || (key === "z" && event.shiftKey);
       if (isRedo ? !scope.canRedo() : !scope.canUndo()) return;

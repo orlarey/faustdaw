@@ -270,9 +270,10 @@ export function wireLibraryUndoKeyboard(): void {
       if (!uiHash) return;
       // Consume the keystroke even when the scope is empty, so it does
       // not fall through to the chain / project scope. Strict isolation :
-      // the footer label is the contract.
+      // the footer label is the contract. stopImmediatePropagation: the
+      // faust-fx and chain handlers are capture listeners on the same target.
       event.preventDefault();
-      event.stopPropagation();
+      event.stopImmediatePropagation();
       const isRedo = key === "y" || (key === "z" && event.shiftKey);
 
       // Route to the OrbitUI wrapper's internal library scope when the

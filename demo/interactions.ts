@@ -60,7 +60,7 @@ import {
   getSessionRenderAudioFileName,
 } from "./download.js";
 import { createNextClipId } from "./clip-id.js";
-import { clearChainUndoScopes } from "./chain-undo.js";
+import { clearChainUndoScopes, recordChainOp } from "./chain-undo.js";
 import { clearFaustFxUndoScopes } from "./faust-fx-undo.js";
 import { canCurrentTabWriteSession } from "./session-permissions.js";
 import {
@@ -76,6 +76,7 @@ import {
 import {
   commitCurrentSessionDocumentChange,
   createCurrentSessionDocument,
+  persistCurrentSessionDocument,
   syncCurrentSessionRevision,
   syncSessionDragHandleState,
 } from "./session-history.js";
@@ -138,6 +139,7 @@ import {
   extractClipOnsetAnnotations,
   extractTransformChain,
   type SessionDocument,
+  withChainContentOf,
 } from "./session-document.js";
 import {
   audioBufferToWavBytes,
@@ -1756,18 +1758,22 @@ function restoreSessionDocument(
   try {
     demoState.transportLoop.stop(elements);
     demoState.project = stop(demoState.project);
-    // The target document may reference an FX resource the current project
-    // dropped (redo after undo): take its code from the session's store.
+    // Project-level undo/redo (level 0) restores the project slice only: the
+    // chain content (effects, parameters, Transform Chain) stays as it is now,
+    // owned by the chain and effect scopes (UNDOREDOSPEC-WEBDAW).
+    const projectDocument = withChainContentOf(sessionDocument, createCurrentSessionDocument());
+    // The document may reference an FX resource the current project dropped:
+    // take its code from the session's store.
     rememberFxResources(demoState.project.fxResources.values());
-    demoState.project = applySessionDocument(demoState.project, sessionDocument, getFxResourceCodeStore());
+    demoState.project = applySessionDocument(demoState.project, projectDocument, getFxResourceCodeStore());
     // Clip structure may have changed (undo/redo of cut, delete, move, …), so the
     // shared grid sliding buffers must be refilled from the restored project model.
     invalidateWaveformSlidingBuffers();
-    demoState.clipOnsetAnnotations = extractClipOnsetAnnotations(sessionDocument);
+    demoState.clipOnsetAnnotations = extractClipOnsetAnnotations(projectDocument);
     demoState.clipOnsetEditorState = null;
-    demoState.transformChain = extractTransformChain(sessionDocument);
-    demoState.masterLevel = applySessionDocumentToTrackPlayers(sessionDocument, demoState.trackPlayers);
-    syncCurrentSessionRevision(sessionDocument);
+    demoState.transformChain = extractTransformChain(projectDocument);
+    demoState.masterLevel = applySessionDocumentToTrackPlayers(projectDocument, demoState.trackPlayers);
+    syncCurrentSessionRevision(projectDocument);
     TrackAudio.syncAllOutputs();
     demoState.audio.syncMasterGain();
     clearSelectedClips();
@@ -3167,15 +3173,15 @@ export function wireEvents(elements: Elements): void {
       try {
         const code = await droppedDspFile.text();
         const dropTrackId = getTrackIdFromGridClientY(dropClientY, elements);
-        const previousSessionDocument = createCurrentSessionDocument();
         const { effect } = importDspFileAsEffect(droppedDspFile, code);
         demoState.project = addEffect(demoState.project, dropTrackId, effect);
         const effectName = getEffectName(effect);
-        commitCurrentSessionDocumentChange(
-          `Add effect "${effectName}" on ${dropTrackId}`,
-          previousSessionDocument,
-          elements,
-        );
+        // Adding an effect is a chain (level 1) op: undone from the track's FX
+        // panel, like an effect added there, never by a project-level undo.
+        const chainEffects = demoState.project.chains.get(dropTrackId)?.effects ?? [];
+        recordChainOp({ chainId: dropTrackId }, { kind: "add", effect, index: chainEffects.length - 1 });
+        persistCurrentSessionDocument(elements);
+        pushRenderLog(`Add effect "${effectName}" on ${dropTrackId}`);
         refreshFxPanelIfOpen(elements);
         await compileAndAttachEffect(effect, dropTrackId, elements);
       } catch (error) {

@@ -23,10 +23,11 @@
  ******************************************************************************/
 
 import type { Elements } from "./bind-elements.js";
-import type { FxEffectId, FxParam } from "../src/domain/fx-chain.js";
+import type { FxEffectId, FxParam, FxResourceId } from "../src/domain/fx-chain.js";
 import { updateEffectParameters } from "../src/fx-chain.js";
 import { demoState } from "./state.js";
 import { persistCurrentSessionDocument } from "./session-history.js";
+import { notifyChainContentChanged, TRANSFORM_CHAIN_ID } from "./chain-undo.js";
 
 // ---------------------------------------------------------------------------
 // Scope keys + ops
@@ -37,11 +38,24 @@ export type FaustFxScopeKey = {
   readonly effectId: FxEffectId;
 };
 
-export type FaustFxOp = {
-  readonly kind: "params";
-  readonly before: ReadonlyArray<FxParam>;
-  readonly after: ReadonlyArray<FxParam>;
+/** The code-bearing state of one effect: which immutable FX resource it runs, and its parameters. */
+export type FaustFxCodeState = {
+  readonly fxResourceId: FxResourceId;
+  readonly parameters: ReadonlyArray<FxParam>;
 };
+
+export type FaustFxOp =
+  | {
+      readonly kind: "params";
+      readonly before: ReadonlyArray<FxParam>;
+      readonly after: ReadonlyArray<FxParam>;
+    }
+  | {
+      /** A compile in the Faust editor (2a → 2): the effect now runs another FX resource. */
+      readonly kind: "code";
+      readonly before: FaustFxCodeState;
+      readonly after: FaustFxCodeState;
+    };
 
 function serializeKey(key: FaustFxScopeKey): string {
   return `faustFx:${key.effectId}`;
@@ -198,14 +212,62 @@ function writeParamsForEffect(
   }
 }
 
+/**
+ * Purpose: Point an effect at another FX resource (code) and write its parameters.
+ * How: Same lookup as writeParamsForEffect (track chains, then Transform
+ *      Chain); returns the id of the chain hosting the effect, or null.
+ */
+function writeCodeStateForEffect(effectId: FxEffectId, state: FaustFxCodeState): string | null {
+  for (const track of demoState.project.timeline.tracks) {
+    const chain = demoState.project.chains.get(track.chainId);
+    if (chain?.effects.some((e) => e.id === effectId)) {
+      const nextChains = new Map(demoState.project.chains);
+      nextChains.set(chain.id, {
+        ...chain,
+        effects: chain.effects.map((e) =>
+          e.id === effectId ? { ...e, fxResourceId: state.fxResourceId, parameters: [...state.parameters] } : e,
+        ),
+      });
+      demoState.project = { ...demoState.project, chains: nextChains };
+      return chain.id;
+    }
+  }
+  if (demoState.transformChain.some((e) => e.id === effectId)) {
+    demoState.transformChain = demoState.transformChain.map((e) =>
+      e.id === effectId ? { ...e, fxResourceId: state.fxResourceId, parameters: [...state.parameters] } : e,
+    );
+    return TRANSFORM_CHAIN_ID;
+  }
+  return null;
+}
+
+/**
+ * Purpose: Write one side (before / after) of an op into the document.
+ * How: Parameters only for a "params" op. For a "code" op, also switch the
+ *      effect's FX resource, then let the hosting chain's panel recompile the
+ *      effect (its runtime no longer matches the code) and rewire the audio.
+ */
+function writeOpSide(key: FaustFxScopeKey, op: FaustFxOp, side: "before" | "after", elements: Elements): void {
+  if (op.kind === "params") {
+    writeParamsForEffect(key.effectId, op[side]);
+    persistCurrentSessionDocument(elements);
+    emitFaustFxChanged(key);
+    return;
+  }
+  const hostChainId = writeCodeStateForEffect(key.effectId, op[side]);
+  persistCurrentSessionDocument(elements);
+  emitFaustFxChanged(key);
+  if (hostChainId !== null) {
+    notifyChainContentChanged({ chainId: hostChainId });
+  }
+}
+
 async function applyOp(
   key: FaustFxScopeKey,
   op: FaustFxOp,
   elements: Elements,
 ): Promise<void> {
-  writeParamsForEffect(key.effectId, op.after);
-  persistCurrentSessionDocument(elements);
-  emitFaustFxChanged(key);
+  writeOpSide(key, op, "after", elements);
 }
 
 async function revertOp(
@@ -213,9 +275,7 @@ async function revertOp(
   op: FaustFxOp,
   elements: Elements,
 ): Promise<void> {
-  writeParamsForEffect(key.effectId, op.before);
-  persistCurrentSessionDocument(elements);
-  emitFaustFxChanged(key);
+  writeOpSide(key, op, "before", elements);
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +328,12 @@ export function wireFaustFxUndoKeyboard(elements: Elements): void {
       // does not fall through to a parent scope. The footer label is
       // the contract : "what the user sees is what Cmd+Z affects".
       event.preventDefault();
-      event.stopPropagation();
+      // stopImmediatePropagation, not stopPropagation: the other scope
+      // handlers are capture listeners on the same target (window), which
+      // stopPropagation does not stop. Applying the op can move the focus
+      // (the panel is rebuilt), and a later handler would then act on the
+      // same keystroke in another scope.
+      event.stopImmediatePropagation();
       const scope = getFaustFxUndoScope(scopeKey);
       const isRedo = key === "y" || (key === "z" && event.shiftKey);
       if (isRedo ? !scope.canRedo() : !scope.canUndo()) return;

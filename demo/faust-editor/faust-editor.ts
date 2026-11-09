@@ -22,7 +22,8 @@ import {
 } from "../fx-chain/fx-chain-audio.js";
 import { getEffectName, buildFxResourceName, extractDeclareName } from "../fx-chain/faust-resource.js";
 import { pushRenderLog, render } from "../daw-render/daw-render-runtime.js";
-import { commitCurrentSessionDocumentChange, createCurrentSessionDocument } from "../session-history.js";
+import { persistCurrentSessionDocument } from "../session-history.js";
+import { recordFaustFxOp } from "../faust-fx-undo.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -265,7 +266,7 @@ async function doCompile(): Promise<void> {
   }
 
   const effectName = getEffectName(effect);
-  const previousSessionDocument = createCurrentSessionDocument();
+  const codeStateBefore = { fxResourceId: effect.fxResourceId, parameters: [...effect.parameters] };
   demoState.footer.setStatus(`Compiling "${effectName}"…`);
 
   try {
@@ -357,12 +358,20 @@ async function doCompile(): Promise<void> {
     ctx.rewireTrackAudio(trackId);
     ctx.refreshPanel();
 
-    // 7. Commit undo/redo
-    commitCurrentSessionDocumentChange(
-      `Edit "${resourceName}" code`,
-      previousSessionDocument,
-      elements,
+    // 7. Undo/redo: a compile is an op of the effect's own scope (level 2,
+    //    UNDOREDOSPEC-WEBDAW "Save / compile du code: 2a → 2"), undone with the
+    //    focus on the effect, never by a project-level undo.
+    const effectAfter = findEffect(currentEffectId)?.effect;
+    recordFaustFxOp(
+      { kind: "faustFx", effectId: currentEffectId },
+      {
+        kind: "code",
+        before: codeStateBefore,
+        after: { fxResourceId: newResourceId, parameters: [...(effectAfter?.parameters ?? effect.parameters)] },
+      },
     );
+    persistCurrentSessionDocument(elements);
+    pushRenderLog(`Edit "${resourceName}" code`);
 
     // 8. Clear error, show success
     hideError();

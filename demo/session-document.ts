@@ -78,6 +78,27 @@ function hashSessionDocumentString(value: string): string {
 }
 
 /**
+ * Purpose: Build the document a project-level (level 0) undo/redo restores:
+ *          the project slice of `target` with the chain content of `current`.
+ * How: Undo scopes are independent (UNDOREDOSPEC-WEBDAW: level 0 = project
+ *      document *without* chain content). Take tracks (clips, gain, pan,
+ *      mute, solo), master gain and sample rate from `target`; take every
+ *      track's effects, the Transform Chain and the FX resource catalog the
+ *      effects reference from `current`, so restoring a project state never
+ *      reverts an effect edit owned by a chain (1) or effect (2) scope.
+ */
+export function withChainContentOf(target: SessionDocument, current: SessionDocument): SessionDocument {
+  const currentEffects = new Map(current.tracks.map((track) => [track.id, track.effects]));
+  const { transformChain: _targetTransformChain, ...targetWithoutTransformChain } = target;
+  return {
+    ...targetWithoutTransformChain,
+    fxResources: current.fxResources,
+    tracks: target.tracks.map((track) => ({ ...track, effects: currentEffects.get(track.id) ?? [] })),
+    ...(current.transformChain ? { transformChain: current.transformChain } : {}),
+  };
+}
+
+/**
  * Purpose: Snapshot the current editable session document from the runtime project and track settings.
  * How: Serialize track gain/pan plus each track clip list as ordered delta-time/resource references.
  */

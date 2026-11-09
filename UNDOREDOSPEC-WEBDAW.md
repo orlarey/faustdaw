@@ -100,16 +100,20 @@ type UndoScopeKey =
 
 ## Audit de l'implémentation actuelle
 
+Arbitrage UX tranché par l'utilisateur (2026-11-09) : **scopes par niveau**, pas de pile unifiée à la mode DAW.
+
 | Scope cible | État actuel | Conformité |
 |---|---|---|
-| DAW scope (0) | Confondu avec tous les sous-niveaux dans la pile session-document monolithique | ✗ |
-| Chain scope (1) | Inexistant ; les ops sont dans la pile monolithique | ✗ |
-| Effect scope (2) | Inexistant ; les ops vont dans la pile monolithique | ✗ |
+| DAW scope (0) | Pile session-document ; une annulation projet ne restaure que la tranche projet (clips, gain, pan, mute, solo, master) et garde le contenu des chaînes courant (`withChainContentOf`, session-document.ts) | ✓ |
+| Chain scope (1) | `chain-undo.ts` : ajout, suppression, ordre, bypass, par chaîne (pistes et Transform Chain) ; un `.dsp` déposé sur la timeline est une op « add » de ce scope | ✓ |
+| Effect scope (2) | `faust-fx-undo.ts` : ops « params » et « code » (une compilation dans l'éditeur Faust, 2a → 2), annulées avec le focus sur l'effet | ✓ |
 | Editor scope (2a) | Fourni par CodeMirror, save = commit vers `FxEffect.code` | ✓ |
-| Orbit-ui scope (2b) | Pas de viewport undo ; les commits de geste vont dans la pile monolithique | ✗ |
-| Library scope (3b) | Inexistant ; les ops IDB sont irrévocables (confirmation pour les destructives) | ✗ |
+| Orbit-ui scope (2b) | Non audité depuis la version précédente de ce tableau | ? |
+| Library scope (3b) | `preset-library-undo.ts` (pile par signature paramètres) ; non audité en détail | ? |
 
-**Synthèse** : un seul scope conforme à la cible (2a, hérité de CodeMirror), un scope monolithique unique qui aplatit les niveaux 0 à 2b, et un niveau (3b) sans scope du tout. L'écart est large.
+Routage clavier : les gestionnaires de scope sont des écouteurs `keydown` en capture sur `window` ; chacun consomme la frappe avec `stopImmediatePropagation`, si bien qu'un seul scope traite une frappe même quand appliquer l'op déplace le focus.
+
+**Synthèse** : les niveaux 0, 1, 2 et 2a sont séparés ; 2b et 3b restent à auditer.
 
 ## Écart à combler
 
@@ -128,6 +132,8 @@ type UndoScopeKey =
 | **2b Orbit-ui scope** | Viewport / sélection undo | Mineur (si vide) à modéré (si couvre viewport) | Faible — état transient, undo peu attendu par l'utilisateur |
 
 L'étape 3b est isolable et autoporteuse — candidate naturelle pour une première étape concrète. Les étapes 1 + 2 demandent un refactor du système d'undo lui-même et un arbitrage UX (pile unifiée à la mode DAW vs scopes par niveau).
+
+Mise à jour (2026-11-09) : l'arbitrage est tranché en faveur des scopes par niveau, et les étapes 1 + 2 sont faites (voir l'audit ci-dessus).
 
 ## Hors-scope
 
