@@ -31,10 +31,10 @@ quantification automatique, MIDI, enregistrement (une spécification à part, pl
 
 L'étude du code (novembre 2026) relève quatre points qui conditionnent ce raffinement.
 
-1. **Unités mêlées à la lecture.** `buildPlan` (`demo/playback-scheduler.ts`) calcule
-   `offsetInBufferFrames = getClipSourceStartSample(clip) + max(effectiveStart − clip.start, 0)` : un écart en
-   `TimeCoord` ajouté à un indice en échantillons. C'est exact à 48 et 96 kHz (`internalTimeFactor = 1`), faux sinon.
-   À corriger avant toute exigence d'exactitude à l'échantillon.
+1. **Unités mêlées à la lecture : corrigé** (commit 86bdd7d). `buildPlan` (`demo/playback-scheduler.ts`) ajoutait un
+   écart en `TimeCoord` à un indice en échantillons, ce qui n'était juste qu'à 48 et 96 kHz. L'écart est désormais
+   converti, `⌊Δ · fs / R⌋`, comme dans `observeOutput` (commit 92c0a76, qui y corrige aussi l'ordre des opérations).
+   Il reste à ajouter un test : lire un clip depuis son milieu à 44,1 kHz et vérifier le premier échantillon joué.
 2. **Réseau de zoom figé à 48 kHz.** `EXACT_TIMELINE_SCALE_LEVELS` (`demo/time-scale.ts`) donne ses pas en échantillons
    à 48 kHz ; `EXACTZOOMSPEC.md` en prévoit un pour 44,1 kHz. Ce raffinement suppose `sampleRate = 48000` ou le réseau
    correspondant.
@@ -255,7 +255,7 @@ P-M5 :  le rendu d'une frame de pan ne dépend pas de timeline.musical (R1)
    - la grille musicale, ses étiquettes et l'aimantation ;
    - le mode d'affichage.
 
-   Préalables : les constats 1 et 4 corrigés.
+   Préalables : le test du constat 1, et le constat 4 (les bancs d'essai) corrigé.
 2. **Le transport partagé** : faustdaw participant de faust-sync, en lecture puis en pilotage. Préalable : le
    constat 3.
 3. **Plus tard** :
