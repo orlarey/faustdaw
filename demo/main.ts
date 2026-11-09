@@ -6,6 +6,7 @@
  *
  ******************************************************************************/
 import { bindElements } from "./bind-elements.js";
+import { installBenchHooks } from "./bench-hooks.js";
 import { restoreWorkingSessionIfAvailable, wireEvents } from "./interactions.js";
 import { pushRenderLog, render, renderFrame } from "./daw-render/daw-render-runtime.js";
 import { computeSessionDocumentRevision, createSessionDocument } from "./session-document.js";
@@ -157,6 +158,7 @@ async function main(): Promise<void> {
 
   pushRenderLog("Harness ready for SPEC.md version 0");
   wireEvents(elements);
+  installBenchHooks(elements);
   window.addEventListener("resize", scheduleResizeRender);
   {
     const gridRect = elements.timelineGrid.getBoundingClientRect();

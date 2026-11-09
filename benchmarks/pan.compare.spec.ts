@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { enablePerf, generateDenseProject, openDemo } from "./bench-page.js";
+
 type PerfRow = {
   metric: string;
   count: number;
@@ -120,34 +122,6 @@ function summarizeRuns(runs: AggregatedPerfRow[][]): AggregatedPerfRow[] {
     .sort((left, right) => right.totalMs - left.totalMs);
 }
 
-async function setCheckbox(page: Page, selector: string, checked: boolean): Promise<void> {
-  const checkbox = page.locator(selector);
-  await expect(checkbox).toBeVisible();
-  if ((await checkbox.isChecked()) !== checked) {
-    if (checked) {
-      await checkbox.check();
-    } else {
-      await checkbox.uncheck();
-    }
-  }
-}
-
-async function enablePerfLogging(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const [{ demoState }, perfModule] = await Promise.all([
-      import("../dist/demo/state.js"),
-      import("../dist/demo/perf.js"),
-    ]);
-    demoState.devFlags.perfLogging = true;
-    perfModule.resetPerfLogging();
-
-    const input = document.getElementById("perf-logging-enabled") as HTMLInputElement | null;
-    if (input) {
-      input.checked = true;
-    }
-  });
-}
-
 async function resetPerf(page: Page): Promise<void> {
   await page.evaluate(() => {
     const perfApi = (window as typeof window & { __webdawPerf?: PerfApi }).__webdawPerf;
@@ -251,24 +225,11 @@ async function runScenario(page: Page, scenario: "empty" | "dense"): Promise<Sce
   const WARMUP_ITERATIONS = 1;
   const MEASURED_ITERATIONS = 5;
 
-  await page.goto("/demo/");
-  await page.waitForLoadState("networkidle");
-  await setCheckbox(page, "#perf-logging-enabled", true);
-  await enablePerfLogging(page);
-  await page.waitForTimeout(50);
+  await openDemo(page);
+  await enablePerf(page);
 
   if (scenario === "dense") {
-    await page.locator("#generator-prefix").fill("stress");
-    await page.locator("#generator-mode").selectOption("round-robin");
-    await page.locator("#generator-count").fill("2000");
-    await page.locator("#generator-min-length").fill("0.1");
-    await page.locator("#generator-max-length").fill("2");
-    await page.locator("#generator-gap").fill("0.2");
-    await page.locator("#generator-form button[type='submit']").click();
-
-    await page.waitForFunction(() => {
-      return document.querySelectorAll("#clips-layer .clip-block").length > 0;
-    });
+    await generateDenseProject(page);
   }
 
   await page.mouse.move(20, 20);

@@ -1,17 +1,9 @@
 import { performance } from "node:perf_hooks";
-import {
-  TRACK_IDS,
-  clipEnd,
-  importAudioResource,
-  initProject,
-  observeOutput,
-  placeClip,
-  play,
-  seek,
-  stop,
-  tick,
-  toTimeCoord,
-} from "../dist/src/daw.js";
+import { importAudioResource } from "../dist/src/domain/audio-resource.js";
+import { clipEnd, placeClip } from "../dist/src/domain/clip.js";
+import { initProject } from "../dist/src/domain/project.js";
+import { TRACK_IDS } from "../dist/src/domain/track-id.js";
+import { observeOutput, play, seek, tick } from "../dist/src/domain/transport.js";
 import { getIndexedClip, getTotalClipCount } from "../dist/demo/project-index.js";
 import { getVisibleClipRangeCached } from "../dist/demo/visible-range-cache.js";
 
@@ -97,7 +89,7 @@ function generateProject(options) {
     const cursor = perTrackCursor.get(trackId) ?? 0;
     const ratio = ((index * 37) % 1000) / 1000;
     const durationSeconds = options.minLength + lengthRange * ratio;
-    const durationCoord = Math.max(1, toTimeCoord(durationSeconds, project.timebase));
+    const durationCoord = Math.max(1, project.timebase.toTimeCoord(durationSeconds));
     const resource = {
       id: `res-${index}`,
       sampleRate,
@@ -106,7 +98,7 @@ function generateProject(options) {
     };
     project = importAudioResource(project, resource);
     project = placeClip(project, `clip-${index}`, resource, cursor, trackId);
-    perTrackCursor.set(trackId, cursor + durationCoord + toTimeCoord(options.gap, project.timebase));
+    perTrackCursor.set(trackId, cursor + durationCoord + project.timebase.toTimeCoord(options.gap));
   }
 
   return project;
@@ -122,7 +114,7 @@ function collectTrackStats(project) {
 }
 
 function runBenchmarks(project, options) {
-  const viewportCoord = toTimeCoord(options.viewportSeconds, project.timebase);
+  const viewportCoord = project.timebase.toTimeCoord(options.viewportSeconds);
   const perTrackMaxEnd = Math.max(
     ...project.timeline.tracks.map((track) => (track.clips.length > 0 ? clipEnd(project, track.clips[track.clips.length - 1]) : 0)),
   );
