@@ -3,11 +3,12 @@
  * Purpose: Render a clip's audio through a Faust Transform Chain offline,
  *          producing a Float32Array[] result with automatic tail detection.
  * How: Use low-level Faust WASM `compute()` API for block-by-block processing.
- *      After the clip PCM ends, inspect a guard block to decide whether the
- *      effect is stateless (no tail) or stateful (reverb/delay tail). Stateless
- *      effects produce a result with exactly the original sample count. Stateful
- *      effects enter a tail phase that feeds silence until the output decays
- *      below a threshold.
+ *      After the clip PCM ends, keep feeding silence until the output has
+ *      stayed below a threshold for TAIL_SILENCE_DURATION_SEC. No early guess
+ *      from the samples right after the clip: an echo can be silent there and
+ *      sound later. When nothing after the clip rises above the threshold,
+ *      the result keeps exactly the original sample count; otherwise it is
+ *      the clip plus its tail, never shorter than the clip.
  *
  *****************************************************************************/
 import type { FxEffect, FxParam } from "../../src/domain/fx-chain.js";
@@ -19,8 +20,13 @@ import type { FxEffect, FxParam } from "../../src/domain/fx-chain.js";
 /** RMS threshold in linear amplitude (corresponds to -60 dB). */
 const TAIL_SILENCE_THRESHOLD = 1e-3;
 
-/** Minimum consecutive silent duration before declaring tail end (in seconds). */
-const TAIL_SILENCE_DURATION_SEC = 0.1;
+/**
+ * Minimum consecutive silent duration before declaring tail end (in seconds).
+ * It bounds the gap the tail may contain: echo repeats spaced by more than
+ * this are cut. 2 s covers common delay times; it costs at most 2 s of extra
+ * offline computation per bounce.
+ */
+const TAIL_SILENCE_DURATION_SEC = 2;
 
 /** Maximum tail duration guard-rail (in seconds). */
 const TAIL_MAX_DURATION_SEC = 30;
@@ -211,58 +217,24 @@ export async function bounceTransformChain(
     const outputChannels = processors.at(-1)!.getNumOutputs();
     const clipLength = clipSamples[0]?.length ?? 0;
 
-    // Pad clip to whole blocks. If clipLength is not a multiple of BLOCK_SIZE,
-    // the last block's zero-padded tail already acts as a stateless probe.
-    // Only add an extra guard block when the clip fills its blocks exactly.
+    // Phase 1: process the clip, zero-padded to whole blocks.
     const clipBlocks = Math.ceil(clipLength / BLOCK_SIZE);
-    const needsGuardBlock = clipLength % BLOCK_SIZE === 0;
-    const totalPaddedBlocks = clipBlocks + (needsGuardBlock ? 1 : 0);
-
-    // Accumulate output blocks
     const outputBlocks: Float32Array[][] = [];
-
-    // Phase 1: Process padded clip (clip samples + zero-padded remainder + guard block)
-    for (let block = 0; block < totalPaddedBlocks; block++) {
+    for (let block = 0; block < clipBlocks; block++) {
       const offset = block * BLOCK_SIZE;
-      const blockLen = Math.min(BLOCK_SIZE, Math.max(clipLength - offset, 0));
-
-      let blockData: Float32Array[] = clipSamples.map((ch) => {
+      const blockLen = Math.min(BLOCK_SIZE, clipLength - offset);
+      const blockData: Float32Array[] = clipSamples.map((ch) => {
         const slice = new Float32Array(BLOCK_SIZE); // zero-initialized
-        if (blockLen > 0) {
-          slice.set(ch.subarray(offset, offset + blockLen));
-        }
+        slice.set(ch.subarray(offset, offset + blockLen));
         return slice;
       });
-
-      blockData = processBlock(blockData, processors);
-      outputBlocks.push(blockData);
+      outputBlocks.push(processBlock(blockData, processors));
     }
 
-    // Phase 2: Inspect the probe region to detect stateless vs stateful.
-    // When a guard block was added, inspect the entire guard block.
-    // Otherwise, inspect the zero-padded tail of the last clip block
-    // (samples beyond clipLength within that block).
-    const lastBlock = outputBlocks.at(-1)!;
-    let probeRms: number;
-    if (needsGuardBlock) {
-      probeRms = computeRms(lastBlock);
-    } else {
-      const probeStart = clipLength % BLOCK_SIZE;
-      const probeChannels = lastBlock.map((ch) => ch.subarray(probeStart));
-      probeRms = computeRms(probeChannels);
-    }
-
-    if (probeRms < TAIL_SILENCE_THRESHOLD) {
-      // Stateless effect — trim to exact original sample count
-      if (needsGuardBlock) outputBlocks.pop();
-      return {
-        samples: assembleOutput(outputBlocks, outputChannels, clipLength),
-        sampleRate,
-      };
-    }
-
-    // Stateful effect — the guard block has signal (tail). Keep it and continue
-    // feeding silence until the tail decays.
+    // Phase 2: tail. Always run it: whether an effect has a tail cannot be
+    // read from the samples right after the clip (a 250 ms echo is silent
+    // there). Feed silence until the output stays below the threshold for
+    // TAIL_SILENCE_DURATION_SEC; silent blocks inside the tail are kept.
     const maxTailBlocks = Math.ceil((TAIL_MAX_DURATION_SEC * sampleRate) / BLOCK_SIZE);
     const silenceBlocks = Math.ceil((TAIL_SILENCE_DURATION_SEC * sampleRate) / BLOCK_SIZE);
     let consecutiveSilentBlocks = 0;
@@ -291,11 +263,25 @@ export async function bounceTransformChain(
       }
     }
 
-    // Assemble all blocks, then trim trailing silent samples
+    // No tail: nothing above the threshold after the clip, neither in the
+    // zero-padded end of its last block nor in the tail phase. Keep exactly the
+    // clip length (a filter's sub-threshold decay is not a tail).
+    const paddedStart = clipLength % BLOCK_SIZE;
+    const paddedRms = paddedStart === 0 || clipBlocks === 0
+      ? 0
+      : computeRms(outputBlocks[clipBlocks - 1]!.map((ch) => ch.subarray(paddedStart)));
+    if (outputBlocks.length === clipBlocks && paddedRms < TAIL_SILENCE_THRESHOLD) {
+      return {
+        samples: assembleOutput(outputBlocks, outputChannels, clipLength),
+        sampleRate,
+      };
+    }
+
+    // Tail: assemble all blocks, then trim trailing exact zeros, never below the clip length.
     const totalSamples = outputBlocks.length * BLOCK_SIZE;
     const assembled = assembleOutput(outputBlocks, outputChannels, totalSamples);
     return {
-      samples: trimTrailingSilence(assembled),
+      samples: trimTrailingSilence(assembled, clipLength),
       sampleRate,
     };
   } finally {
@@ -306,11 +292,11 @@ export async function bounceTransformChain(
 }
 
 /**
- * Purpose: Remove trailing zero samples from multi-channel audio.
+ * Purpose: Remove trailing zero samples from multi-channel audio, keeping at least `minLength`.
  * How: Scan backwards from the end across all channels to find the last
- *      non-zero sample, then return sub-arrays trimmed to that length.
+ *      non-zero sample, then return sub-arrays trimmed to that length (or `minLength`).
  */
-function trimTrailingSilence(channels: Float32Array[]): Float32Array[] {
+function trimTrailingSilence(channels: Float32Array[], minLength = 0): Float32Array[] {
   if (channels.length === 0) return channels;
   const length = channels[0]!.length;
   let lastNonZero = -1;
@@ -323,7 +309,7 @@ function trimTrailingSilence(channels: Float32Array[]): Float32Array[] {
     }
     if (lastNonZero >= 0) break;
   }
-  const trimmedLength = lastNonZero + 1;
+  const trimmedLength = Math.min(length, Math.max(lastNonZero + 1, minLength));
   if (trimmedLength === length) return channels;
   return channels.map((ch) => ch.subarray(0, trimmedLength));
 }

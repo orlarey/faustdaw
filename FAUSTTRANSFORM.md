@@ -227,12 +227,8 @@ fixe.
 
 2. **Lire le PCM du clip** via `deps.sampleStore.read`.
 
-3. **Padding et bloc de garde.** Le clip est paddé à un nombre entier
-   de blocs de 128 samples (les samples manquants sont remplis de
-   zéros). Si la durée du clip est **exactement** un multiple de 128,
-   un bloc supplémentaire de silence pur (« bloc de garde ») est
-   ajouté. Sinon, la zone paddée du dernier bloc sert elle-même de
-   sonde.
+3. **Padding.** Le clip est paddé à un nombre entier de blocs de
+   128 samples (les samples manquants sont remplis de zéros).
 
 4. **Phase clip** : traiter tous les blocs paddés à travers la chaîne
    de processeurs :
@@ -245,15 +241,13 @@ fixe.
      accumulate output block
    ```
 
-5. **Détection stateless / stateful.** Inspecter la sortie de la
-   zone de sonde (bloc de garde complet, ou portion paddée du dernier
-   bloc). Si le RMS est sous le seuil de silence → l'effet est
-   **stateless** (gain, EQ, etc.) : le résultat est tronqué à
-   **exactement** le nombre de samples du clip original (au sample
-   près, pas d'arrondi au bloc). Si le RMS est au-dessus du seuil →
-   l'effet est **stateful** (reverb, delay) : passer en phase tail.
+5. **Pas de classement stateless / stateful a priori.** Les samples
+   qui suivent immédiatement le clip ne disent pas si l'effet a une
+   queue : un écho de 250 ms y est silencieux et ne sonne que plus
+   tard. (Une version antérieure décidait sur un bloc de garde ; elle
+   tronquait ces échos à la durée du clip.)
 
-6. **Phase tail** (stateful uniquement) : continuer à traiter des
+6. **Phase tail** (toujours) : continuer à traiter des
    blocs de **silence** en entrée. Les blocs silencieux en sortie sont
    mis en attente et ne sont ajoutés au résultat que si un bloc
    non-silencieux suit (pour éviter d'inclure du silence de fin).
@@ -261,9 +255,12 @@ fixe.
    silence requise.
 
 7. **Assembler et tronquer.** Assembler les blocs accumulés en
-   `Float32Array[]`. Pour les effets stateful, scanner en arrière
-   pour supprimer les derniers samples à zéro (trim au sample près,
-   pas aux frontières de blocs). Passer le résultat à
+   `Float32Array[]`. Si rien n'a dépassé le seuil après la fin du clip
+   (ni dans la zone paddée de son dernier bloc, ni en phase tail), le
+   résultat a **exactement** la longueur du clip. Sinon, scanner en
+   arrière pour supprimer les derniers samples à zéro (trim au sample
+   près, pas aux frontières de blocs), **sans jamais descendre sous la
+   longueur du clip**. Passer le résultat à
    `applySelectionOperation(new FaustTransformSelection(), { processedSamples, … })`.
 
 ### Tail Detection
@@ -276,17 +273,23 @@ post-traitement sur un buffer pré-alloué. Avantages :
 - **Pas de troncature** : contrairement à un `OfflineAudioContext` de
   durée fixe, on ne risque pas de couper une queue longue.
 - **Efficace** : on s'arrête dès que le silence est détecté, pas
-  besoin de rendre puis scanner un buffer surdimensionné.
+  besoin de rendre puis scanner un buffer surdimensionné. Coût : au
+  plus la durée du critère d'arrêt (2 s) de calcul hors ligne en plus.
 - **Pas de rallongement des effets stateless** : un gain ou un EQ
-  produit un résultat de **même durée** que le clip original, grâce
-  à la détection par bloc de garde.
+  produit un résultat de **même durée** que le clip original : sa
+  sortie après le clip reste sous le seuil (la décroissance d'un
+  filtre n'est pas une queue), et le résultat est coupé à la longueur
+  du clip.
 
 Paramètres de la tail detection :
 
 - **Seuil** : -60 dB RMS (configurable).
 - **Fenêtre d'analyse** : blocs de 128 samples (taille native Faust).
 - **Critère d'arrêt** : le signal est sous le seuil pendant au moins
-  100 ms consécutives (environ 4410 samples à 44.1 kHz).
+  2 s consécutives. Cette durée borne l'écart toléré entre deux
+  répétitions d'un écho : des répétitions plus espacées sont coupées.
+  (Elle valait 100 ms, ce qui coupait toute répétition espacée de
+  plus de 100 ms.)
 - **Garde-fou** : durée maximale de tail (ex: 30 secondes) pour éviter
   un rendu infini si l'effet produit un signal permanent (oscillateur,
   feedback loop non amorti).
