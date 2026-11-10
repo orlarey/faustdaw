@@ -284,6 +284,7 @@ post-traitement sur un buffer pré-alloué. Avantages :
 Paramètres de la tail detection :
 
 - **Seuil** : -60 dB RMS **sous la crête de la sortie du clip** (convention RT60), plancher -120 dBFS. Relatif, pour qu'un même effet sur un même matériau garde la même queue quel que soit le niveau. (Il était absolu, -60 dBFS : un clip faible perdait ses répétitions, un clip à -60 dBFS perdait son écho.)
+  *Limite connue, reportée (2026-11-10)* : pour un effet sans signal direct dont le retard dépasse la durée du clip (délai pur suivi d'une rétroaction, réverbération à grand prédélai), la sortie pendant le clip est (quasi) nulle et le seuil tombe au plancher : la queue est gardée jusqu'à -120 dBFS, plus longue que nécessaire et de nouveau dépendante du niveau (mesuré : 5,2 s à -6 dBFS, 3,45 s à -48 dBFS, pour environ 2,95 s utiles). Rien n'est perdu. Raffinement envisagé : une crête glissante (seuil = 1e-3 × max(crête du clip, crête vue jusqu'ici dans la queue), qui ne fait que monter).
 - **Fenêtre d'analyse** : blocs de 128 samples (taille native Faust).
 - **Critère d'arrêt** : le signal est sous le seuil pendant au moins
   2 s consécutives. Cette durée borne l'écart toléré entre deux
