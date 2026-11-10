@@ -3,7 +3,8 @@
  * Purpose: Check the two properties playback timing relies on: the anchor is
  *          a whole frame at least a lead ahead of currentTime, and an event
  *          meant for a whole frame N is scheduled strictly below N, within
- *          the bias (never at N + ε, where Chromium drops the first sample).
+ *          the bias (never at N + ε, where the gain step of the event
+ *          only takes effect on frame N + 1, zeroing the first sample).
  * How: Drive playbackAnchorTime / scheduledAudioTime over currentTime values
  *      that are not whole frames, sample rates, and offsets up to one hour.
  *

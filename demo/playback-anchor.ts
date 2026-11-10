@@ -12,13 +12,15 @@
  *        so every event of the run lands on a whole frame too.
  *      - scheduledAudioTime: anchor + offset, moved SCHEDULE_FRAME_BIAS of a
  *        frame earlier. An event meant for frame N must not land at N + ε
- *        (floating-point rounding of seconds): Chromium then starts the
- *        source at frame N + 1 with a sub-sample offset of almost one frame,
- *        losing its first sample (and a stop at N + ε plays one frame too
- *        many), so split halves no longer rejoin sample-exactly. At N - 1e-4
- *        it starts and stops on frame N; the interpolation this implies is
- *        1e-4 of a frame (-80 dB), far above the rounding error of the sum
- *        (~1e-8 frame after an hour at 48 kHz).
+ *        (floating-point rounding of seconds). The source itself starts
+ *        sub-sample accurately at N, but its event gain is created at 0 and
+ *        raised by setValueAtTime(1, t), and an AudioParam event takes effect
+ *        at the first frame whose time is >= t (Web Audio spec): at N + ε the
+ *        gain is still 0 on frame N, so the clip's first sample is lost (a
+ *        one-sample hole where split halves rejoin). At N - 1e-4 the step
+ *        takes effect on frame N; the source's sub-sample interpolation this
+ *        implies is 1e-4 of a frame (-80 dB), far above the rounding error of
+ *        the sum (~1e-8 frame after an hour at 48 kHz).
  *
  ******************************************************************************/
 
