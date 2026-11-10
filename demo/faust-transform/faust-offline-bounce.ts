@@ -4,7 +4,9 @@
  *          producing a Float32Array[] result with automatic tail detection.
  * How: Use low-level Faust WASM `compute()` API for block-by-block processing.
  *      After the clip PCM ends, keep feeding silence until the output has
- *      stayed below a threshold for TAIL_SILENCE_DURATION_SEC. No early guess
+ *      stayed below a threshold for TAIL_SILENCE_DURATION_SEC. The threshold
+ *      is relative to the peak of the clip's output (-60 dB), so the same
+ *      effect on the same material keeps the same tail at any level. No early guess
  *      from the samples right after the clip: an echo can be silent there and
  *      sound later. When nothing after the clip rises above the threshold,
  *      the result keeps exactly the original sample count; otherwise it is
@@ -17,8 +19,38 @@ import type { FxEffect, FxParam } from "../../src/domain/fx-chain.js";
 // Tail detection constants
 // ---------------------------------------------------------------------------
 
-/** RMS threshold in linear amplitude (corresponds to -60 dB). */
-const TAIL_SILENCE_THRESHOLD = 1e-3;
+/**
+ * Block RMS below which the output counts as silent, relative to the peak of
+ * the clip's output (-60 dB, the RT60 convention). An absolute threshold made
+ * the result depend on the level: a -48 dBFS clip through a feedback delay
+ * kept one repeat instead of all those above -60 dB, a -60 dBFS clip lost its
+ * echo entirely.
+ */
+const TAIL_RELATIVE_THRESHOLD = 1e-3;
+
+/** Floor of that threshold (-120 dBFS), for a clip whose output is (near) silent. */
+const TAIL_THRESHOLD_FLOOR = 1e-6;
+
+/**
+ * Purpose: Silence threshold (block RMS) for the tail of a clip whose output
+ *          peaks at `outputPeak`.
+ */
+export function tailSilenceThreshold(outputPeak: number): number {
+  return Math.max(TAIL_THRESHOLD_FLOOR, TAIL_RELATIVE_THRESHOLD * outputPeak);
+}
+
+function computePeak(blocks: readonly Float32Array[][]): number {
+  let peak = 0;
+  for (const block of blocks) {
+    for (const channel of block) {
+      for (let i = 0; i < channel.length; i++) {
+        const value = Math.abs(channel[i]!);
+        if (value > peak) peak = value;
+      }
+    }
+  }
+  return peak;
+}
 
 /**
  * Minimum consecutive silent duration before declaring tail end (in seconds).
@@ -231,6 +263,8 @@ export async function bounceTransformChain(
       outputBlocks.push(processBlock(blockData, processors));
     }
 
+    const silenceThreshold = tailSilenceThreshold(computePeak(outputBlocks));
+
     // Phase 2: tail. Always run it: whether an effect has a tail cannot be
     // read from the samples right after the clip (a 250 ms echo is silent
     // there). Feed silence until the output stays below the threshold for
@@ -245,7 +279,7 @@ export async function bounceTransformChain(
       const blockData = processBlock(silenceInput, processors);
 
       const rms = computeRms(blockData);
-      if (rms < TAIL_SILENCE_THRESHOLD) {
+      if (rms < silenceThreshold) {
         consecutiveSilentBlocks++;
         pendingSilentBlocks.push(blockData);
         if (consecutiveSilentBlocks >= silenceBlocks) {
@@ -270,7 +304,7 @@ export async function bounceTransformChain(
     const paddedRms = paddedStart === 0 || clipBlocks === 0
       ? 0
       : computeRms(outputBlocks[clipBlocks - 1]!.map((ch) => ch.subarray(paddedStart)));
-    if (outputBlocks.length === clipBlocks && paddedRms < TAIL_SILENCE_THRESHOLD) {
+    if (outputBlocks.length === clipBlocks && paddedRms < silenceThreshold) {
       return {
         samples: assembleOutput(outputBlocks, outputChannels, clipLength),
         sampleRate,

@@ -283,7 +283,7 @@ post-traitement sur un buffer pré-alloué. Avantages :
 
 Paramètres de la tail detection :
 
-- **Seuil** : -60 dB RMS (configurable).
+- **Seuil** : -60 dB RMS **sous la crête de la sortie du clip** (convention RT60), plancher -120 dBFS. Relatif, pour qu'un même effet sur un même matériau garde la même queue quel que soit le niveau. (Il était absolu, -60 dBFS : un clip faible perdait ses répétitions, un clip à -60 dBFS perdait son écho.)
 - **Fenêtre d'analyse** : blocs de 128 samples (taille native Faust).
 - **Critère d'arrêt** : le signal est sous le seuil pendant au moins
   2 s consécutives. Cette durée borne l'écart toléré entre deux
@@ -413,7 +413,7 @@ et des structures projet.
    - Instancie les processeurs Faust bas niveau (API WASM `compute()`),
      copie les paramètres depuis les instances de preview.
    - Traite bloc par bloc : phase clip puis phase tail (silence en
-     entrée, arrêt quand RMS < seuil pendant 100 ms).
+     entrée, arrêt quand RMS < seuil pendant 2 s ; voir « Tail Detection »).
    - Passe les samples résultants (`Float32Array[]`) à
      `applySelectionOperation(new FaustTransformSelection(), params)`.
 5. **Cancel** :
@@ -611,7 +611,7 @@ Les quatre passent le test de concision → les groupements sont sains.
    - Capture des paramètres depuis les preview nodes.
    - Instanciation des processeurs Faust WASM bas niveau.
    - Rendu bloc par bloc : phase clip + phase tail (silence en entrée,
-     arrêt sur seuil -60 dB RMS pendant 100 ms, garde-fou 30 s).
+     arrêt quand RMS < -60 dB sous la crête pendant 2 s, garde-fou 30 s).
    - Appel `applySelectionOperation` avec `processedSamples`.
 
 8. **Entrée dans le workflow** :

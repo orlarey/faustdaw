@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { bounceTransformChain } from "../demo/faust-transform/faust-offline-bounce.js";
+import { bounceTransformChain, tailSilenceThreshold } from "../demo/faust-transform/faust-offline-bounce.js";
 import type { FxEffect } from "../src/domain/fx-chain.js";
 
 const SR = 48_000;
@@ -112,4 +112,37 @@ test("repeats 1.5 s apart (gap longer than the old 100 ms window) are kept", asy
   const y = await bounce(feedbackDelay(delay, 0.5));
   const ref = reference(feedbackDelay(delay, 0.5), 20);
   assert.ok(y.length >= ref.last + 1, `${y.length} < ${ref.last + 1}`);
+});
+
+const scaled = (x: Float32Array, k: number) => Float32Array.from(x, (v) => v * k);
+
+test("the tail does not depend on the clip level: a -66 dBFS clip keeps its echo whole", async () => {
+  const delay = 0.25 * SR;
+  const loud = await bounce(singleEcho(delay, 0.5));
+  const quiet = await bounce(singleEcho(delay, 0.5), scaled(burst, 1e-3)); // peak 0.0005
+  assert.equal(quiet.length, loud.length);
+  const ref = reference(singleEcho(delay, 0.5), 1, scaled(burst, 1e-3));
+  assert.ok(energy(quiet) / energy(ref.y) > 0.999);
+});
+
+test("a quiet clip through a feedback delay keeps the same repeats as a loud one", async () => {
+  const delay = 0.25 * SR;
+  const loud = await bounce(feedbackDelay(delay, 0.5));
+  for (const k of [0.04, 0.008, 0.002]) { // about -34, -48, -60 dBFS
+    const quiet = await bounce(feedbackDelay(delay, 0.5), scaled(burst, k));
+    assert.equal(quiet.length, loud.length, `level ${k}`);
+  }
+});
+
+test("a quiet filter whose decay stays 60 dB under its peak still keeps the clip length", async () => {
+  const clip = new Float32Array(burst.length + 60);
+  clip.set(scaled(burst, 0.002));
+  const y = await bounce(onePole(0.9), clip);
+  assert.equal(y.length, clip.length);
+});
+
+test("the threshold is 60 dB under the output peak, floored at -120 dBFS", () => {
+  assert.equal(tailSilenceThreshold(0.5), 5e-4);
+  assert.equal(tailSilenceThreshold(1e-3), 1e-6);
+  assert.equal(tailSilenceThreshold(0), 1e-6);
 });
