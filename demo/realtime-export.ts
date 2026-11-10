@@ -1,9 +1,10 @@
 /**************************** realtime-export.ts ******************************
  *
  * Purpose: Real-time WAV export — start/stop a capture pipeline that taps the
- *          master output through a ScriptProcessorNode, accumulates Float32
- *          chunks during playback, assembles them into a 16-bit PCM WAV blob,
- *          and triggers a browser download.
+ *          master output through an AudioWorklet recorder (realtime-capture.ts),
+ *          accumulates frame-dated Float32 chunks during playback, assembles
+ *          them from the frame the timeline's zero plays on into a 16-bit PCM
+ *          WAV blob, and triggers a browser download.
  * How: Expose four top-level operations (toggle / start / finish / cancel)
  *      that mutate `demoState.realtimeExport`. Each takes an `elements` root
  *      and calls the transport / audio-engine / playback-session APIs
@@ -18,25 +19,66 @@ import { play, seek, stop } from "../src/domain/transport.js";
 import { applyTransition, pushRenderLog, render } from "./daw-render/daw-render-runtime.js";
 import { downloadBlob, getMixdownFileName } from "./download.js";
 import { formatCurrentAbsoluteTimeLabel } from "./format.js";
+import {
+  RECORDER_PROCESSOR_NAME,
+  RECORDER_PROCESSOR_SOURCE,
+  assembleCapture,
+  type CapturedChunk,
+} from "./realtime-capture.js";
 
 /**
  * Purpose: Describe the capture pipeline of one in-flight real-time WAV export.
- * How: Hold the ScriptProcessorNode pulling samples, the accumulated chunks,
- *      and the fixed sample rate and channel count used to render the WAV.
+ * How: Hold the recorder node, the frame-dated chunks it posted, the audio
+ *      frame the timeline's zero plays on (the playback anchor), and the
+ *      fixed sample rate and channel count used to render the WAV.
  */
 export type RealtimeExportState = {
-  scriptNode: ScriptProcessorNode;
-  chunks: Float32Array[];
+  recorder: AudioWorkletNode;
+  chunks: CapturedChunk[];
+  anchorFrame: number;
   sampleRate: number;
   channelCount: number;
 };
 
+// Contexts the recorder processor was already added to.
+const recorderReadyContexts = new WeakSet<BaseAudioContext>();
+
+async function ensureRecorderModule(audioContext: AudioContext): Promise<void> {
+  if (recorderReadyContexts.has(audioContext)) {
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([RECORDER_PROCESSOR_SOURCE], { type: "application/javascript" }));
+  try {
+    await audioContext.audioWorklet.addModule(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  recorderReadyContexts.add(audioContext);
+}
+
+function releaseRecorder(exportState: RealtimeExportState): void {
+  exportState.recorder.port.onmessage = null;
+  exportState.recorder.port.close();
+  exportState.recorder.disconnect();
+  if (demoState.audio.masterGain) {
+    try { demoState.audio.masterGain.disconnect(exportState.recorder); } catch { /* already disconnected */ }
+  }
+}
+
+// The finish in progress (waiting for the recorder's last chunk), if any.
+let finishingExport: Promise<void> | null = null;
+
 /**
  * Purpose: Start or stop a real-time WAV export that captures the live audio output (including effects).
- * How: On start — return to zero, start playback, attach a ScriptProcessorNode to the master output to collect PCM chunks.
- *      On stop — disconnect the capture node, assemble chunks into a WAV blob, and trigger a download.
+ * How: On start — return to zero, attach the recorder to the master output, start playback.
+ *      On stop — flush and release the recorder, assemble the chunks from the anchor frame
+ *      into a WAV blob, and trigger a download. Clicks while a stop is flushing are ignored.
  */
 export function toggleRealtimeExport(elements: Elements): void {
+  if (finishingExport) {
+    // The previous export is still collecting its last frames.
+    return;
+  }
   if (pendingExportStart) {
     // A click while the export waits for the audio engine cancels it, as a
     // click on "Stop Export" would: never start a second, orphan capture.
@@ -44,7 +86,7 @@ export function toggleRealtimeExport(elements: Elements): void {
     return;
   }
   if (demoState.realtimeExport) {
-    finishRealtimeExport(elements);
+    void finishRealtimeExport(elements);
     return;
   }
   void startRealtimeExport(elements);
@@ -63,6 +105,16 @@ async function startRealtimeExport(elements: Elements): Promise<void> {
   pendingExportStart = attempt;
   try {
     await demoState.audio.startSilent();
+    const startedContext = demoState.audio.context;
+    if (startedContext && !attempt.cancelled) {
+      await ensureRecorderModule(startedContext);
+    }
+  } catch (error) {
+    pendingExportStart = null;
+    demoState.audio.stopSilent();
+    pushRenderLog(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    render(elements);
+    return;
   } finally {
     pendingExportStart = null;
   }
@@ -90,21 +142,28 @@ async function startRealtimeExport(elements: Elements): Promise<void> {
   );
 
   const channelCount = 2;
-  const bufferSize = 4096;
-  const scriptNode = audioContext.createScriptProcessor(bufferSize, channelCount, channelCount);
-  const chunks: Float32Array[] = [];
-
-  scriptNode.onaudioprocess = (event: AudioProcessingEvent): void => {
-    const left = event.inputBuffer.getChannelData(0);
-    const right = event.inputBuffer.getChannelData(1);
-    chunks.push(new Float32Array(left));
-    chunks.push(new Float32Array(right));
+  // Connected before playback starts: the capture begins before the anchor
+  // (which lies PLAYBACK_START_LEAD_SECONDS ahead), so the file can start
+  // exactly on it.
+  const recorder = new AudioWorkletNode(audioContext, RECORDER_PROCESSOR_NAME, {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [channelCount],
+    channelCount,
+    channelCountMode: "explicit",
+    processorOptions: { channelCount },
+  });
+  const chunks: CapturedChunk[] = [];
+  recorder.port.onmessage = (event: MessageEvent) => {
+    if (event.data && typeof event.data === "object" && "startFrame" in event.data) {
+      chunks.push(event.data as CapturedChunk);
+    }
   };
+  masterGain.connect(recorder);
+  recorder.connect(audioContext.destination);
 
-  masterGain.connect(scriptNode);
-  scriptNode.connect(audioContext.destination);
-
-  demoState.realtimeExport = { scriptNode, chunks, sampleRate: audioContext.sampleRate, channelCount };
+  const exportState: RealtimeExportState = { recorder, chunks, anchorFrame: 0, sampleRate: audioContext.sampleRate, channelCount };
+  demoState.realtimeExport = exportState;
 
   demoState.lastPlayStartCoord = demoState.project.timeline.cursor;
   demoState.project = play(demoState.project);
@@ -112,15 +171,16 @@ async function startRealtimeExport(elements: Elements): Promise<void> {
     demoState.playbackSession.start();
   } catch (error) {
     // Same rule as Play: never leave a capture node or a Playing transport behind.
-    scriptNode.onaudioprocess = null;
-    scriptNode.disconnect();
-    try { masterGain.disconnect(scriptNode); } catch { /* already disconnected */ }
+    releaseRecorder(exportState);
     demoState.realtimeExport = null;
     demoState.transportLoop.abortFailedPlay(elements);
     pushRenderLog(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
     render(elements);
     return;
   }
+  // The timeline's zero (the cursor, sought to 0 above) plays on this frame.
+  const anchorTime = demoState.playbackSession.audioStartTime;
+  exportState.anchorFrame = Math.round((anchorTime ?? audioContext.currentTime) * audioContext.sampleRate);
   demoState.transportLoop.startIfNeeded(elements);
 
   elements.exportMixdownButton.textContent = "Stop Export";
@@ -128,44 +188,66 @@ async function startRealtimeExport(elements: Elements): Promise<void> {
   render(elements);
 }
 
-export function finishRealtimeExport(elements: Elements): void {
+export function finishRealtimeExport(elements: Elements): Promise<void> {
+  if (finishingExport) {
+    return finishingExport;
+  }
   const exportState = demoState.realtimeExport;
   if (!exportState) {
-    return;
+    return Promise.resolve();
   }
+  finishingExport = finishRealtimeExportNow(exportState, elements).finally(() => {
+    finishingExport = null;
+  });
+  return finishingExport;
+}
 
+/**
+ * Purpose: Stop the transport, collect the recorder's last frames and save.
+ * How: Ask the processor to flush and wait for its "flushed" reply (bounded,
+ *      so a stalled audio thread cannot block the UI), then cut the capture at
+ *      the anchor frame and encode it. Missing frames, if any, are reported.
+ */
+async function finishRealtimeExportNow(exportState: RealtimeExportState, elements: Elements): Promise<void> {
   if (demoState.project.timeline.transport === "Playing") {
     demoState.transportLoop.stop(elements);
     applyTransition("Stop", () => stop(demoState.project), elements);
   }
 
-  exportState.scriptNode.onaudioprocess = null;
-  exportState.scriptNode.disconnect();
-  if (demoState.audio.masterGain) {
-    try { demoState.audio.masterGain.disconnect(exportState.scriptNode); } catch { /* already disconnected */ }
+  await new Promise<void>((resolve) => {
+    const timeoutId = window.setTimeout(resolve, 1000);
+    exportState.recorder.port.onmessage = (event: MessageEvent) => {
+      if (event.data === "flushed") {
+        window.clearTimeout(timeoutId);
+        resolve();
+      } else if (event.data && typeof event.data === "object" && "startFrame" in event.data) {
+        exportState.chunks.push(event.data as CapturedChunk);
+      }
+    };
+    exportState.recorder.port.postMessage("flush");
+  });
+  if (demoState.realtimeExport !== exportState) {
+    // Cancelled while flushing (e.g. Play): cancelRealtimeExport released it.
+    return;
   }
+  releaseRecorder(exportState);
+  demoState.realtimeExport = null;
 
-  const { chunks, sampleRate, channelCount } = exportState;
-  const framesPerChunk = chunks.length > 0 ? chunks[0]!.length : 0;
-  const totalChunkPairs = chunks.length / channelCount;
-  const totalFrames = totalChunkPairs * framesPerChunk;
+  const { sampleRate, channelCount } = exportState;
+  const { channels, missingFrames } = assembleCapture(exportState.chunks, exportState.anchorFrame, channelCount);
 
-  if (totalFrames > 0) {
-    const left = new Float32Array(totalFrames);
-    const right = new Float32Array(totalFrames);
-    for (let i = 0; i < totalChunkPairs; i++) {
-      left.set(chunks[i * channelCount]!, i * framesPerChunk);
-      right.set(chunks[i * channelCount + 1]!, i * framesPerChunk);
-    }
-    const wavBlob = float32ChannelsToWavBlob([left, right], sampleRate);
+  if (channels[0]!.length > 0) {
+    const wavBlob = float32ChannelsToWavBlob(channels, sampleRate);
     const fileName = getMixdownFileName(demoState.session.name);
     downloadBlob(wavBlob, fileName);
     pushRenderLog(`Export WAV "${fileName}"`);
+    if (missingFrames > 0) {
+      pushRenderLog(`WARNING: ${missingFrames} frame(s) were not captured and are silent in the export`);
+    }
   } else {
     pushRenderLog("Export cancelled — no audio captured");
   }
 
-  demoState.realtimeExport = null;
   elements.exportMixdownButton.textContent = "Export WAV";
   render(elements);
 }
@@ -178,11 +260,7 @@ export function cancelRealtimeExport(elements: Elements): void {
   if (!exportState) {
     return;
   }
-  exportState.scriptNode.onaudioprocess = null;
-  exportState.scriptNode.disconnect();
-  if (demoState.audio.masterGain) {
-    try { demoState.audio.masterGain.disconnect(exportState.scriptNode); } catch { /* already disconnected */ }
-  }
+  releaseRecorder(exportState);
   demoState.realtimeExport = null;
   elements.exportMixdownButton.textContent = "Export WAV";
   pushRenderLog("Export cancelled");
