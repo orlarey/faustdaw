@@ -22,6 +22,7 @@ import { TRACK_IDS, type TrackId } from "../src/domain/track-id.js";
 import { demoState } from "./state.js";
 import { START_STOP_FADE_SECONDS } from "./audio-engine.js";
 import { TrackAudio } from "./track/track-audio.js";
+import { scheduledAudioTime } from "./playback-anchor.js";
 import type {
   TrackPlaybackEvent,
   TrackPlaybackPlan,
@@ -228,11 +229,14 @@ export class PlaybackScheduler {
   #audioTimeAt(transportCoord: number): number {
     const transportStart = demoState.playbackSession.transportStartCoord;
     const audioStart = demoState.playbackSession.audioStartTime;
-    if (transportStart === null || audioStart === null) {
+    const audioContext = demoState.audio.context;
+    if (transportStart === null || audioStart === null || !audioContext) {
       throw new Error("Invariant violation: missing playback session");
     }
-    return audioStart + demoState.viewport.timeScale.fromTimeCoord(
-      Math.max(transportCoord - transportStart, 0),
+    return scheduledAudioTime(
+      audioStart,
+      demoState.viewport.timeScale.fromTimeCoord(Math.max(transportCoord - transportStart, 0)),
+      audioContext.sampleRate,
     );
   }
 

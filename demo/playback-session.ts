@@ -19,8 +19,9 @@ import { TRACK_IDS } from "../src/domain/track-id.js";
 import { demoState } from "./state.js";
 import { clearAllEffectRuntimes } from "./fx-chain/fx-chain-runtime.js";
 import { TrackAudio } from "./track/track-audio.js";
-import type { PlaybackSessionAnchor } from "./track/track-playback.js";
+import type { PlaybackSessionAnchor, TrackPlaybackPlan } from "./track/track-playback.js";
 import { View } from "./view/view.js";
+import { PLAYBACK_START_LEAD_SECONDS, playbackAnchorTime } from "./playback-anchor.js";
 
 const MIN_PLAN_DURATION_SECONDS = 2;
 
@@ -53,10 +54,12 @@ export class PlaybackSession {
    *      time, then build + activate the initial per-track plans and step the scheduler.
    *      `resetEffects` defaults to true so a fresh playback starts from clean DSP state ;
    *      pass `false` for soft restarts (e.g. loop iterations) so reverb tails and delay
-   *      lines continue across the wrap.
+   *      lines continue across the wrap. `leadSeconds` (see playback-anchor.ts) keeps
+   *      every source start in the future; plans are built before the anchor is taken
+   *      so the lead only has to cover the hop to the render thread.
    */
-  start(options: { resetEffects?: boolean } = {}): void {
-    const { resetEffects = true } = options;
+  start(options: { resetEffects?: boolean; leadSeconds?: number } = {}): void {
+    const { resetEffects = true, leadSeconds = PLAYBACK_START_LEAD_SECONDS } = options;
     const audioContext = demoState.audio.context;
     this.stop();
     demoState.transportLoop.resetTimingCounters();
@@ -66,10 +69,6 @@ export class PlaybackSession {
     }
 
     if (resetEffects) clearAllEffectRuntimes();
-    this.#anchor = {
-      transportStartCoord: demoState.project.timeline.cursor,
-      audioStartTime: audioContext.currentTime,
-    };
     TrackAudio.resetPlayers();
 
     // Ensure every track has an audio output chain (including the silent
@@ -79,6 +78,7 @@ export class PlaybackSession {
     }
 
     const minPlanDurationCoord = demoState.viewport.timeScale.toTimeCoord(MIN_PLAN_DURATION_SECONDS);
+    const activePlans: TrackPlaybackPlan[] = [];
     for (const track of demoState.project.timeline.tracks) {
       const trackPlayer = demoState.trackPlayers.get(track.id);
       if (!trackPlayer) {
@@ -89,9 +89,17 @@ export class PlaybackSession {
       if (!activePlan) {
         continue;
       }
-      demoState.scheduler.activatePlan(activePlan);
       trackPlayer.activePlan = activePlan;
       trackPlayer.nextPlan = demoState.scheduler.buildPlan(track, activePlan.endTime, minPlanDurationCoord);
+      activePlans.push(activePlan);
+    }
+
+    this.#anchor = {
+      transportStartCoord: demoState.project.timeline.cursor,
+      audioStartTime: playbackAnchorTime(audioContext.currentTime, audioContext.sampleRate, leadSeconds),
+    };
+    for (const activePlan of activePlans) {
+      demoState.scheduler.activatePlan(activePlan);
     }
     demoState.scheduler.step();
   }

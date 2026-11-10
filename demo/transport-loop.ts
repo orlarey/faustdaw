@@ -141,7 +141,9 @@ export class TransportLoop {
         demoState.playbackSession.stop();
         // Soft restart : do NOT reset Faust DSP state, so reverb tails
         // and delay lines continue smoothly across the loop boundary.
-        demoState.playbackSession.start({ resetEffects: false });
+        // No start lead: the wrap is already detected late (frame clock), a
+        // lead would lengthen the gap at every iteration.
+        demoState.playbackSession.start({ resetEffects: false, leadSeconds: 0 });
       }
     }
 
