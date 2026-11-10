@@ -19,6 +19,7 @@
 import { demoState } from "./state.js";
 import { DEFAULT_MASTER_LEVEL } from "./track/track-playback.js";
 import { TrackAudio } from "./track/track-audio.js";
+import { setParamImmediately, setParamSmoothly } from "./audio-param-smoothing.js";
 
 /** Short fade applied when starting/stopping the silent engine or track plans. */
 export const START_STOP_FADE_SECONDS = 0.005;
@@ -72,6 +73,8 @@ export class AudioEngine {
     if (!this.#masterGain) {
       this.#masterGain = context.createGain();
       this.#masterGain.connect(context.destination);
+      // A fresh node starts at gain 1: set the level at once.
+      setParamImmediately(this.#masterGain.gain, demoState.masterLevel);
     }
     this.syncMasterGain();
     return this.#masterGain;
@@ -80,7 +83,7 @@ export class AudioEngine {
   /** Project the current demoState.masterLevel into the master gain node, if it exists. */
   syncMasterGain(): void {
     if (this.#masterGain) {
-      this.#masterGain.gain.value = demoState.masterLevel;
+      setParamSmoothly(this.#masterGain.gain, demoState.masterLevel, this.#masterGain.context);
     }
   }
 

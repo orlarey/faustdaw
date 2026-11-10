@@ -9,6 +9,7 @@ import { TRACK_IDS, type TrackId } from "../../src/domain/track-id.js";
 import { wireTrackEffectChain } from "../fx-chain/fx-chain-audio.js";
 import { DEFAULT_TRACK_LEVEL } from "./track-playback.js";
 import { demoState } from "../state.js";
+import { setParamImmediately, setParamSmoothly } from "../audio-param-smoothing.js";
 
 // Purpose: Rebuild every track player with preserved user controls and cleared runtime nodes/plans.
 // How: Allocate a fresh fixed track-player map from TRACK_IDS while carrying over level, pan, mute, and solo flags.
@@ -73,13 +74,22 @@ export function getTrackEffectiveGain(trackId: TrackId): number {
 // Purpose: Synchronize one track output chain with the current mix controls.
 // How: Push the current effective gain and pan values into the already-created output nodes when they exist.
 //      During Transform Preview, the preview track is forced to center pan.
-export function syncTrackOutputRuntime(trackId: TrackId): void {
+export function syncTrackOutputRuntime(trackId: TrackId, options: { immediate?: boolean } = {}): void {
   const trackPlayer = demoState.trackPlayers.get(trackId);
   if (!trackPlayer) {
     return;
   }
+  // Smoothly during playback (no click on mute / solo / volume / pan), at
+  // once for nodes just created (see audio-param-smoothing.ts).
+  const setParam = (param: AudioParam, value: number, context: BaseAudioContext): void => {
+    if (options.immediate) {
+      setParamImmediately(param, value);
+    } else {
+      setParamSmoothly(param, value, context);
+    }
+  };
   if (trackPlayer.outputGain) {
-    trackPlayer.outputGain.gain.value = getTrackEffectiveGain(trackId);
+    setParam(trackPlayer.outputGain.gain, getTrackEffectiveGain(trackId), trackPlayer.outputGain.context);
   }
   if (trackPlayer.outputPanner) {
     // During Transform Preview, force center pan on the preview track
@@ -89,11 +99,11 @@ export function syncTrackOutputRuntime(trackId: TrackId): void {
         (t) => t.id === trackId && t.clips.some((c) => c.id === preview.clipId),
       );
       if (isPreviewTrack) {
-        trackPlayer.outputPanner.pan.value = 0;
+        setParam(trackPlayer.outputPanner.pan, 0, trackPlayer.outputPanner.context);
         return;
       }
     }
-    trackPlayer.outputPanner.pan.value = trackPlayer.pan;
+    setParam(trackPlayer.outputPanner.pan, trackPlayer.pan, trackPlayer.outputPanner.context);
   }
 }
 
@@ -133,6 +143,9 @@ export function ensureTrackOutputRuntime(
   if (!trackPlayer.effectInputGain) {
     trackPlayer.effectInputGain = audioContext.createGain();
   }
+  // Fresh output nodes start at their defaults (gain 1, pan 0): set them at
+  // once, never approach from there.
+  const createdOutput = !trackPlayer.outputGain || !trackPlayer.outputPanner;
   if (!trackPlayer.outputGain) {
     trackPlayer.outputGain = audioContext.createGain();
   }
@@ -166,7 +179,7 @@ export function ensureTrackOutputRuntime(
   const masterOutputGain = ensureMasterOutputGain(audioContext);
   trackPlayer.outputGain.connect(trackPlayer.outputPanner);
   trackPlayer.outputPanner.connect(masterOutputGain);
-  syncTrackOutputRuntime(trackId);
+  syncTrackOutputRuntime(trackId, { immediate: createdOutput });
   return trackPlayer.effectInputGain;
 }
 

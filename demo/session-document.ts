@@ -8,6 +8,7 @@ import { importFxResource } from "../src/fx-chain.js";
 import { clipEnd } from "../src/domain/clip.js";
 import type { TrackPlayerState } from "./track/track-playback.js";
 import type { ClipOnsetAnnotation } from "./onsets.js";
+import { setParamSmoothly } from "./audio-param-smoothing.js";
 
 export type SessionClipDocument = {
   clipId: string;
@@ -370,7 +371,7 @@ export function applySessionDocumentToTrackPlayers(
       soloTrackId = trackDocument.id;
     }
     if (trackPlayer.outputPanner) {
-      trackPlayer.outputPanner.pan.value = trackPlayer.pan;
+      setParamSmoothly(trackPlayer.outputPanner.pan, trackPlayer.pan, trackPlayer.outputPanner.context);
     }
   }
   return sessionDocument.masterGain ?? DEFAULT_MASTER_LEVEL;
