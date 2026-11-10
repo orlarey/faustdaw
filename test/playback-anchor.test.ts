@@ -15,6 +15,7 @@ import test from "node:test";
 import {
   PLAYBACK_START_LEAD_SECONDS,
   SCHEDULE_FRAME_BIAS,
+  loopWrapAudioTime,
   playbackAnchorTime,
   scheduledAudioTime,
 } from "../demo/playback-anchor.js";
@@ -63,4 +64,30 @@ test("relative timing is unchanged: two events keep their exact distance", () =>
   const a = scheduledAudioTime(anchor, 0.5, rate);
   const b = scheduledAudioTime(anchor, 1.0, rate);
   assert.ok(Math.abs((b - a) * rate - 24000) < 1e-6);
+});
+
+test("loop wraps stay on whole frames, exactly one loop apart, over thousands of iterations", () => {
+  for (const rate of RATES) {
+    for (const loopFrames of [rate / 2, 12345, 3 * rate + 7]) {
+      const loopSeconds = loopFrames / rate;
+      const first = playbackAnchorTime(12.345678, rate, PLAYBACK_START_LEAD_SECONDS);
+      const firstFrame = Math.round(first * rate);
+      let anchor = first;
+      for (let k = 1; k <= 20000; k++) {
+        anchor = loopWrapAudioTime(anchor, loopSeconds, rate);
+        if (k % 997 === 0 || k === 20000) {
+          assert.equal(Math.round(anchor * rate), firstFrame + k * loopFrames, `rate ${rate}, loop ${loopFrames}, wrap ${k}`);
+          assert.ok(Math.abs(anchor * rate - Math.round(anchor * rate)) < 1e-6);
+        }
+      }
+    }
+  }
+});
+
+test("the first wrap after a start inside the loop lands on the loop end", () => {
+  const rate = 48000;
+  const anchor = playbackAnchorTime(3.21, rate, PLAYBACK_START_LEAD_SECONDS);
+  // Started 0.2 s into a 0.5 s loop: the wrap is 0.3 s after the anchor.
+  const wrap = loopWrapAudioTime(anchor, 0.3, rate);
+  assert.equal(Math.round(wrap * rate) - Math.round(anchor * rate), 14400);
 });

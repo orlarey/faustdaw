@@ -37,3 +37,16 @@ export function playbackAnchorTime(currentTime: number, sampleRate: number, lead
 export function scheduledAudioTime(anchorTime: number, offsetSeconds: number, sampleRate: number): number {
   return anchorTime + offsetSeconds - SCHEDULE_FRAME_BIAS / sampleRate;
 }
+
+/**
+ * Purpose: Audio time of a loop wrap: where `secondsToLoopEnd` after the
+ *          current anchor falls, rounded to the whole frame.
+ * How: Each wrap becomes the anchor the next one is computed from, so it is
+ *      rounded to a whole frame: every iteration's events then land on whole
+ *      frames, where SCHEDULE_FRAME_BIAS applies, and the wraps stay exactly
+ *      one loop length apart (plain addition would drift by ~1e-3 frame over
+ *      an hour: negligible, but no longer on whole frames).
+ */
+export function loopWrapAudioTime(anchorTime: number, secondsToLoopEnd: number, sampleRate: number): number {
+  return Math.round((anchorTime + secondsToLoopEnd) * sampleRate) / sampleRate;
+}

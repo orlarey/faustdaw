@@ -20,6 +20,13 @@ import { renderFrame } from "./daw-render/daw-render-runtime.js";
 import { commitTimelinePreviewOffset } from "./view/viewport-commit.js";
 import { presetTrackingSystem } from "./preset-tracking.js";
 
+/**
+ * How long before a loop's end its next iteration is scheduled. Must exceed a
+ * frame interval (the check runs per animation frame) plus the hop to the
+ * render thread; bounded by half the loop for short loops.
+ */
+const LOOP_PRESCHEDULE_SECONDS = 0.25;
+
 export class TransportLoop {
   #frameId: number | null = null;
   #timestamp: number | null = null;
@@ -129,14 +136,29 @@ export class TransportLoop {
     const audioContext = demoState.audio.context;
     if (demoState.playbackSession.isActive && audioContext?.state === "running") {
       this.#timestamp = timestamp;
-      const targetCursor = demoState.scheduler.transportCoordAt(audioContext.currentTime);
+      const targetCursor = demoState.scheduler.displayTransportCoordAt(audioContext.currentTime);
       if (targetCursor !== demoState.project.timeline.cursor) {
         demoState.project = seek(demoState.project, targetCursor);
       }
 
-      // Loop back to start when the cursor reaches the end of the play-selection range.
+      // Loop: schedule the next iteration ahead, so it starts sample-exactly
+      // where this one ends (PlaybackSession.scheduleLoopWrap).
       const loopRange = demoState.playSelection.loopRange;
-      if (loopRange && demoState.project.timeline.cursor >= loopRange.endCoord) {
+      if (loopRange && !demoState.playbackSession.hasPendingLoopWrap) {
+        const wrapAudioTime = demoState.playbackSession.audioTimeOfCoord(loopRange.endCoord);
+        const loopSeconds = demoState.viewport.timeScale.fromTimeCoord(loopRange.endCoord - loopRange.startCoord);
+        const untilWrap = wrapAudioTime === null ? -1 : wrapAudioTime - audioContext.currentTime;
+        if (untilWrap > 0 && untilWrap <= Math.min(LOOP_PRESCHEDULE_SECONDS, loopSeconds / 2)) {
+          demoState.playbackSession.scheduleLoopWrap(loopRange.startCoord, loopRange.endCoord);
+        }
+      }
+      // Fallback, when the wrap could not be scheduled in time (frames
+      // throttled in a background tab): loop back once the cursor is past it.
+      if (
+        loopRange
+        && !demoState.playbackSession.hasPendingLoopWrap
+        && demoState.project.timeline.cursor >= loopRange.endCoord
+      ) {
         demoState.project = seek(demoState.project, loopRange.startCoord);
         demoState.playbackSession.stop();
         // Soft restart : do NOT reset Faust DSP state, so reverb tails

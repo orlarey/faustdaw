@@ -21,12 +21,16 @@ import { clearAllEffectRuntimes } from "./fx-chain/fx-chain-runtime.js";
 import { TrackAudio } from "./track/track-audio.js";
 import type { PlaybackSessionAnchor, TrackPlaybackPlan } from "./track/track-playback.js";
 import { View } from "./view/view.js";
-import { PLAYBACK_START_LEAD_SECONDS, playbackAnchorTime } from "./playback-anchor.js";
+import { PLAYBACK_START_LEAD_SECONDS, loopWrapAudioTime, playbackAnchorTime, scheduledAudioTime } from "./playback-anchor.js";
 
 const MIN_PLAN_DURATION_SECONDS = 2;
 
 export class PlaybackSession {
   #anchor: PlaybackSessionAnchor | null = null;
+  // Between scheduleLoopWrap and the wrap itself, #anchor already maps the
+  // next iteration (for scheduling) while the cursor still follows `previous`.
+  #pendingWrap: { audioTime: number; previous: PlaybackSessionAnchor } | null = null;
+  #loopIteration = 0;
 
   // -------------------------------------------------------------------------
   // Read access
@@ -42,6 +46,37 @@ export class PlaybackSession {
 
   get audioStartTime(): number | null {
     return this.#anchor?.audioStartTime ?? null;
+  }
+
+  /** True between scheduleLoopWrap and the audio time of the wrap. */
+  get hasPendingLoopWrap(): boolean {
+    return this.#pendingWrap !== null;
+  }
+
+  /**
+   * Purpose: The anchor that maps `audioTime` to the cursor shown to the user.
+   * How: Before a pre-scheduled loop wrap, the iteration that is still sounding
+   *      (`previous`); from the wrap on, the current anchor. Clears the pending
+   *      wrap once `audioTime` has reached it.
+   */
+  displayAnchorAt(audioTime: number): PlaybackSessionAnchor | null {
+    const pending = this.#pendingWrap;
+    if (pending) {
+      if (audioTime < pending.audioTime) {
+        return pending.previous;
+      }
+      this.#pendingWrap = null;
+    }
+    return this.#anchor;
+  }
+
+  /** Audio time (no schedule bias) at which `coord` plays under the current anchor. */
+  audioTimeOfCoord(coord: TimeCoord): number | null {
+    const anchor = this.#anchor;
+    if (!anchor) {
+      return null;
+    }
+    return anchor.audioStartTime + demoState.viewport.timeScale.fromTimeCoord(coord - anchor.transportStartCoord);
   }
 
   // -------------------------------------------------------------------------
@@ -108,6 +143,97 @@ export class PlaybackSession {
   stop(): void {
     demoState.scheduler.stop();
     this.#anchor = null;
+    this.#pendingWrap = null;
+  }
+
+  /**
+   * Purpose: Schedule the next loop iteration to start exactly where the current
+   *          one ends, instead of stopping and restarting once the wrap is seen.
+   * How: The wrap is the audio time of `loopEndCoord` under the current anchor,
+   *      on a whole frame. The anchor moves to (loopStartCoord, wrap) and the
+   *      next iteration's plans are built and activated against it now, so their
+   *      sources start sample-exactly at the wrap. The plans still sounding keep
+   *      playing (anything they hold past the wrap is stopped at the wrap) and
+   *      are kept for Stop; those of the iteration before have ended and are
+   *      released. Effect runtimes are untouched, so tails continue.
+   *      Returns false when there is nothing to schedule against.
+   */
+  scheduleLoopWrap(loopStartCoord: TimeCoord, loopEndCoord: TimeCoord): boolean {
+    const audioContext = demoState.audio.context;
+    const anchor = this.#anchor;
+    if (!audioContext || !anchor || this.#pendingWrap) {
+      return false;
+    }
+    const sampleRate = audioContext.sampleRate;
+    const timeScale = demoState.viewport.timeScale;
+    const wrapAudioTime = loopWrapAudioTime(
+      anchor.audioStartTime,
+      timeScale.fromTimeCoord(loopEndCoord - anchor.transportStartCoord),
+      sampleRate,
+    );
+    const wrapStopTime = scheduledAudioTime(wrapAudioTime, 0, sampleRate);
+    const endingIteration = this.#loopIteration;
+    const nextIteration = endingIteration + 1;
+
+    const minPlanDurationCoord = timeScale.toTimeCoord(MIN_PLAN_DURATION_SECONDS);
+    const newPlans: TrackPlaybackPlan[] = [];
+    for (const track of demoState.project.timeline.tracks) {
+      const trackPlayer = demoState.trackPlayers.get(track.id);
+      if (!trackPlayer) {
+        continue;
+      }
+      // Plans from before the ending iteration have finished: release them.
+      trackPlayer.retiringPlans = trackPlayer.retiringPlans.filter(
+        (plan) => (plan.loopIteration ?? endingIteration) >= endingIteration,
+      );
+      for (const plan of [trackPlayer.activePlan, trackPlayer.nextPlan]) {
+        if (!plan) {
+          continue;
+        }
+        if (!plan.activated) {
+          // Prepared but never scheduled: its nodes were never connected.
+          continue;
+        }
+        plan.loopIteration ??= endingIteration;
+        // Nothing of the ending iteration may sound past the wrap.
+        for (const event of plan.events) {
+          const stopAudioTime = scheduledAudioTime(
+            anchor.audioStartTime,
+            timeScale.fromTimeCoord(Math.max(plan.anchorTime + event.stopOffsetInPlan - anchor.transportStartCoord, 0)),
+            sampleRate,
+          );
+          if (stopAudioTime > wrapStopTime) {
+            try {
+              event.sourceNode.stop(wrapStopTime);
+            } catch {
+              // Already stopped or never started.
+            }
+          }
+        }
+        trackPlayer.retiringPlans.push(plan);
+      }
+      trackPlayer.activePlan = null;
+      trackPlayer.nextPlan = null;
+      const activePlan = demoState.scheduler.buildPlan(track, loopStartCoord, minPlanDurationCoord);
+      if (!activePlan) {
+        continue;
+      }
+      activePlan.loopIteration = nextIteration;
+      trackPlayer.activePlan = activePlan;
+      trackPlayer.nextPlan = demoState.scheduler.buildPlan(track, activePlan.endTime, minPlanDurationCoord);
+      if (trackPlayer.nextPlan) {
+        trackPlayer.nextPlan.loopIteration = nextIteration;
+      }
+      newPlans.push(activePlan);
+    }
+
+    this.#pendingWrap = { audioTime: wrapAudioTime, previous: anchor };
+    this.#anchor = { transportStartCoord: loopStartCoord, audioStartTime: wrapAudioTime };
+    this.#loopIteration = nextIteration;
+    for (const plan of newPlans) {
+      demoState.scheduler.activatePlan(plan);
+    }
+    return true;
   }
 
   /** Rebind playback to the current cursor after a discrete timeline edit during playback. */

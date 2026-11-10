@@ -204,6 +204,22 @@ export class PlaybackScheduler {
   }
 
   /**
+   * Purpose: Transport coordinate shown to the user at `audioTime`.
+   * How: Same mapping as transportCoordAt, but through the anchor of the loop
+   *      iteration that is sounding (PlaybackSession.displayAnchorAt): before a
+   *      pre-scheduled wrap the cursor keeps running to the loop end.
+   */
+  displayTransportCoordAt(audioTime: number): number {
+    const anchor = demoState.playbackSession.displayAnchorAt(audioTime);
+    if (!anchor) {
+      return demoState.project.timeline.cursor;
+    }
+    return anchor.transportStartCoord + demoState.viewport.timeScale.toTimeCoord(
+      Math.max(audioTime - anchor.audioStartTime, 0),
+    );
+  }
+
+  /**
    * Purpose: Convert an AudioContext time to the corresponding transport coordinate for the active session.
    * How: Measure elapsed audio time since session start and map it to the project's internal timebase.
    */

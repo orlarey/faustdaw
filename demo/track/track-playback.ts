@@ -51,6 +51,8 @@ export type TrackPlaybackPlan = {
   endTime: TimeCoord;
   events: TrackPlaybackEvent[];
   activated: boolean;
+  /** Loop iteration the plan belongs to (PlaybackSession.scheduleLoopWrap); absent outside loops. */
+  loopIteration?: number;
 };
 
 /**
