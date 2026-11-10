@@ -59,12 +59,18 @@ export interface MenuOperation {
  *      caller's transition inside `applySessionDocumentTransition`, writing
  *      the new Selection into demoState before the commit reads it — so the
  *      session-document snapshot captures (new project, new selection)
- *      together.
+ *      together. With `restartPlayback`, a transition that changes what is
+ *      heard (delete, reverse, crossfade, transform) then rebinds a running
+ *      playback to the new project: the sources already scheduled would
+ *      otherwise keep playing the old clips until the next Play. Transitions
+ *      that leave the sound unchanged (split, merge of contiguous clips,
+ *      rename) do not ask for it, so playback is not interrupted.
  */
 export function commitSelectionTransition(
   label: string,
   transition: () => Selection,
   elements: Elements,
+  options: { restartPlayback?: boolean } = {},
 ): Selection | null {
   demoState.clipRenderStable.dirty = true;
   invalidateWaveformSlidingBuffers();
@@ -78,5 +84,8 @@ export function commitSelectionTransition(
     },
     elements,
   );
+  if (result !== null && options.restartPlayback) {
+    demoState.playbackSession.restartIfNeeded();
+  }
   return result;
 }

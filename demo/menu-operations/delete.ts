@@ -14,7 +14,6 @@ import { Selection as SelectionNS } from "../../src/domain/selection/selection.j
 import { removeClip } from "../../src/domain/clip.js";
 import { commitSelectionTransition, type MenuEnv, type MenuOperation } from "../menu-operation.js";
 import { clearClipOnsetAnnotationsForClipIds } from "../onset-annotations.js";
-import { demoState } from "../state.js";
 
 class DeleteOperation implements MenuOperation {
   readonly name = "Delete";
@@ -40,11 +39,8 @@ class DeleteOperation implements MenuOperation {
         return SelectionNS.empty(project);
       },
       env.elements,
+      { restartPlayback: true },
     );
-
-    if (result !== null) {
-      demoState.playbackSession.restartIfNeeded();
-    }
 
     return result ?? "cancelled";
   }

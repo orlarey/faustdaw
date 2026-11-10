@@ -846,6 +846,7 @@ export function wireTransformPanel(elements: Elements, _context: TransformPanelC
             return Selection.of(transitionResult.project, [transitionResult.clip.id]);
           },
           elements,
+          { restartPlayback: true },
         );
       }
 

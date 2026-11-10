@@ -85,6 +85,7 @@ class CrossfadeOperation implements MenuOperation {
         return SelectionNS.of(project, survivorIds);
       },
       env.elements,
+      { restartPlayback: true },
     ) ?? "cancelled";
   }
 }

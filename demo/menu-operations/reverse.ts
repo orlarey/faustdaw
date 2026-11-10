@@ -41,6 +41,7 @@ class ReverseOperation implements MenuOperation {
         return SelectionNS.of(project, reversedIds);
       },
       env.elements,
+      { restartPlayback: true },
     ) ?? "cancelled";
   }
 }
