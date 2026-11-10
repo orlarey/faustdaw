@@ -8,7 +8,7 @@
  *****************************************************************************/
 import type { FxEffectId, FxParam } from "../../src/domain/fx-chain.js";
 import type { TrackId } from "../../src/domain/track-id.js";
-import { getEffectRuntime } from "./fx-chain-runtime.js";
+import { getEffectRuntime, noteWiredEffectNodes } from "./fx-chain-runtime.js";
 import { demoState } from "../state.js";
 
 /**
@@ -20,6 +20,8 @@ import { demoState } from "../state.js";
  *      Before wiring, every candidate effect node is disconnected so rewires after a reorder
  *      don't leave stale edges behind (those would form feedback loops). A runtime whose node
  *      belongs to another AudioContext is skipped (connect would throw).
+ *      The nodes wired are recorded (noteWiredEffectNodes): a removed or
+ *      recompiled effect's node this path no longer goes through is released then.
  */
 export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outputNode: GainNode): void {
   // During Transform Preview, replace the target track's effects with Transform Chain
@@ -30,6 +32,7 @@ export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outp
     );
     if (isPreviewTrack) {
       disconnectChainRuntimes(demoState.transformChain);
+      const wired: AudioNode[] = [];
       let currentNode: AudioNode = inputNode;
       for (const effect of demoState.transformChain) {
         if (effect.bypassed) continue;
@@ -37,8 +40,10 @@ export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outp
         if (!runtime?.node || runtime.node.context !== inputNode.context) continue;
         currentNode.connect(runtime.node);
         currentNode = runtime.node;
+        wired.push(currentNode);
       }
       currentNode.connect(outputNode);
+      noteWiredEffectNodes(trackId, wired);
       return;
     }
   }
@@ -48,10 +53,12 @@ export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outp
   const effects = chain?.effects ?? [];
   if (effects.length === 0) {
     inputNode.connect(outputNode);
+    noteWiredEffectNodes(trackId, []);
     return;
   }
 
   disconnectChainRuntimes(effects);
+  const wired: AudioNode[] = [];
   let currentNode: AudioNode = inputNode;
   for (const effect of effects) {
     if (effect.bypassed) {
@@ -65,8 +72,11 @@ export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outp
     }
     currentNode.connect(runtime.node);
     currentNode = runtime.node;
+    wired.push(currentNode);
   }
   currentNode.connect(outputNode);
+  // Retired nodes this path no longer goes through are released now.
+  noteWiredEffectNodes(trackId, wired);
 }
 
 const nodeIds = new WeakMap<AudioNode, number>();

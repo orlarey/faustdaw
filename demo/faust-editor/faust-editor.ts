@@ -294,7 +294,8 @@ async function doCompile(): Promise<void> {
       audioContext,
     );
 
-    // 3. Swap: destroy old runtime, register new one under the real ID
+    // 3. Swap: register the new runtime under the real ID. The old node is
+    //    retired: it keeps sounding until step 6 rewires the track (faded).
     destroyEffectRuntime(currentEffectId);
     destroyEffectRuntime(tempId as any);
     registerEffectRuntime(currentEffectId as any, runtime);

@@ -24,6 +24,70 @@ export type FxEffectRuntime = {
 
 const effectRuntimes = new Map<FxEffectId, FxEffectRuntime>();
 
+/*
+ * Retired nodes. A node replaced (recompiled) or removed while a track's
+ * current path still goes through it keeps its connections until that path
+ * is rewired without it. Disconnecting it at once cut the sound from one
+ * sample to the next, and left the track's output gain without input: an
+ * AudioParam's automation only advances while its node has a connected input
+ * (Chrome), so the fade around the rewire (track-runtime.ts) never ran and
+ * the sound came back as abruptly.
+ */
+const retiredEffectNodes = new Set<AudioNode>();
+// The effect nodes each wired path (one per track) currently goes through.
+const wiredEffectNodes = new Map<string, ReadonlySet<AudioNode>>();
+
+function disconnectNode(node: AudioNode): void {
+  try {
+    node.disconnect();
+  } catch {
+    // already disconnected
+  }
+}
+
+/** Disconnect every retired node that no wired path goes through any more. */
+function releaseRetiredEffectNodes(): void {
+  for (const node of retiredEffectNodes) {
+    let wired = false;
+    for (const nodes of wiredEffectNodes.values()) {
+      if (nodes.has(node)) {
+        wired = true;
+        break;
+      }
+    }
+    if (!wired) {
+      disconnectNode(node);
+      retiredEffectNodes.delete(node);
+    }
+  }
+}
+
+function retireEffectNode(node: AudioNode): void {
+  retiredEffectNodes.add(node);
+  releaseRetiredEffectNodes();
+}
+
+/**
+ * Purpose: Record the effect nodes a path (`pathId`: the track) was just wired
+ *          through, and release the retired nodes it no longer uses.
+ */
+export function noteWiredEffectNodes(pathId: string, nodes: Iterable<AudioNode>): void {
+  wiredEffectNodes.set(pathId, new Set(nodes));
+  releaseRetiredEffectNodes();
+}
+
+/** Store `runtime` under `effectId`, retiring the node it replaces. */
+function replaceEffectRuntime(effectId: FxEffectId, runtime: FxEffectRuntime): void {
+  const previousNode = effectRuntimes.get(effectId)?.node;
+  effectRuntimes.set(effectId, runtime);
+  if (runtime.node) {
+    retiredEffectNodes.delete(runtime.node); // in use again
+  }
+  if (previousNode && previousNode !== runtime.node) {
+    retireEffectNode(previousNode);
+  }
+}
+
 /**
  * Purpose: Decide whether a compiled runtime still implements `code` in `audioContext`.
  * How: Same source text, and a node created by that very context, which must not be closed.
@@ -114,9 +178,9 @@ export async function compileFxEffect(
       code,
     };
 
-    // Replace a stale runtime (other code or other context): release its node first.
-    destroyEffectRuntime(effectId);
-    effectRuntimes.set(effectId, runtime);
+    // Replace a stale runtime (other code or other context). Its node is
+    // released once no wired path goes through it any more.
+    replaceEffectRuntime(effectId, runtime);
     return runtime;
   });
 }
@@ -128,39 +192,46 @@ export function getEffectRuntime(effectId: FxEffectId): FxEffectRuntime | undefi
 
 /**
  * Purpose: Register an externally-compiled runtime under a given effect ID.
- * How: Store the runtime in the map, updating its effectId field.
+ * How: Store the runtime in the map, updating its effectId field; the node it
+ *      replaces is retired (released once no wired path goes through it).
  */
 export function registerEffectRuntime(effectId: FxEffectId, runtime: FxEffectRuntime): void {
-  effectRuntimes.set(effectId, { ...runtime, effectId });
+  replaceEffectRuntime(effectId, { ...runtime, effectId });
 }
 
 /**
- * Purpose: Disconnect and remove the runtime state for one effect.
- * How: Disconnect the AudioWorkletNode from the graph and remove from the map.
+ * Purpose: Remove the runtime state for one effect.
+ * How: Remove it from the map and retire its node: disconnected at once when
+ *      no wired path goes through it, else when its track is rewired without
+ *      it (the track then fades instead of being cut).
  */
 export function destroyEffectRuntime(effectId: FxEffectId): void {
   const runtime = effectRuntimes.get(effectId);
   if (!runtime) {
     return;
   }
-  if (runtime.node) {
-    try {
-      runtime.node.disconnect();
-    } catch {
-      // already disconnected
-    }
-  }
   effectRuntimes.delete(effectId);
+  if (runtime.node) {
+    retireEffectNode(runtime.node);
+  }
 }
 
 /**
  * Purpose: Release the runtimes of effects that no longer exist (another session was loaded).
- * How: Destroy every runtime whose effect id is not in `keep`.
+ * How: Disconnect at once and forget every runtime whose effect id is not in
+ *      `keep`, and every node still in retirement (the previous session's).
  */
 export function retainEffectRuntimes(keep: ReadonlySet<FxEffectId>): void {
-  for (const effectId of [...effectRuntimes.keys()]) {
+  for (const node of retiredEffectNodes) {
+    disconnectNode(node);
+  }
+  retiredEffectNodes.clear();
+  for (const [effectId, runtime] of [...effectRuntimes.entries()]) {
     if (!keep.has(effectId)) {
-      destroyEffectRuntime(effectId);
+      effectRuntimes.delete(effectId);
+      if (runtime.node) {
+        disconnectNode(runtime.node);
+      }
     }
   }
 }
