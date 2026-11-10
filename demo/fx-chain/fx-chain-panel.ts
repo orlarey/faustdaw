@@ -727,11 +727,20 @@ export function wireFxPanel(elements: Elements, context: FxPanelContext): void {
       recordChainOp({ chainId: track.chainId }, { kind: "bypass", effectId });
     } else if (target.classList.contains("fx-ctrl-delete")) {
       const index = chain.effects.findIndex((e) => e.id === effectId);
-      destroyEffectRuntime(effectId);
       demoState.project = removeEffect(demoState.project, track.chainId, effectId);
       persistCurrentSessionDocument(elements);
       pushRenderLog(`Remove effect from ${trackId}`);
       recordChainOp({ chainId: track.chainId }, { kind: "remove", effect, index });
+      // Rewire first (faded during playback), destroy the node after: it
+      // keeps sounding through the fade-out instead of being cut before it.
+      TrackAudio.ensureOutputGain(trackId, (c) => demoState.audio.ensureMasterGain(c));
+      TrackAudio.whenChainSettled(trackId, () => {
+        const restored = [...demoState.project.chains.values()].some((c) => c.effects.some((e) => e.id === effectId));
+        if (!restored) destroyEffectRuntime(effectId);
+      });
+      syncFxPanelList(elements);
+      render(elements);
+      return;
     } else {
       return;
     }

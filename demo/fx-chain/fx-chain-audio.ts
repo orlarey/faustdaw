@@ -69,6 +69,49 @@ export function wireTrackEffectChain(trackId: TrackId, inputNode: GainNode, outp
   currentNode.connect(outputNode);
 }
 
+const nodeIds = new WeakMap<AudioNode, number>();
+let nextNodeId = 1;
+
+function nodeId(node: AudioNode): number {
+  let id = nodeIds.get(node);
+  if (id === undefined) {
+    id = nextNodeId++;
+    nodeIds.set(node, id);
+  }
+  return id;
+}
+
+/**
+ * Purpose: Identify the effect path wireTrackEffectChain would build for a
+ *          track, so a rewire can tell a real topology change (bypass, add,
+ *          remove, reorder, a recompiled node) from a re-connection of the
+ *          same path.
+ * How: Same selection as wireTrackEffectChain (Transform Preview chain or the
+ *      track's non-bypassed effects with a runtime node of this context), as
+ *      the ordered identities of those nodes.
+ */
+export function trackEffectChainKey(trackId: TrackId, context: BaseAudioContext): string {
+  const preview = demoState.faustTransformPreview;
+  const isPreviewTrack = preview !== null && preview !== undefined && demoState.project.timeline.tracks.some(
+    (t) => t.id === trackId && t.clips.some((c) => c.id === preview.clipId),
+  );
+  let effects: ReadonlyArray<{ id: FxEffectId; bypassed: boolean }>;
+  if (isPreviewTrack) {
+    effects = demoState.transformChain;
+  } else {
+    const track = demoState.project.timeline.tracks.find((t) => t.id === trackId);
+    effects = (track ? demoState.project.chains.get(track.chainId)?.effects : undefined) ?? [];
+  }
+  const ids: number[] = [];
+  for (const effect of effects) {
+    if (effect.bypassed) continue;
+    const node = getEffectRuntime(effect.id)?.node;
+    if (!node || node.context !== context) continue;
+    ids.push(nodeId(node));
+  }
+  return `${isPreviewTrack ? "preview" : "track"}:${ids.join(",")}`;
+}
+
 /**
  * Purpose: Clear all outgoing connections of the runtime nodes of a chain before rewiring.
  * How: Call disconnect() on each live AudioWorkletNode. Swallow errors for nodes that had

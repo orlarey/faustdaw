@@ -12,6 +12,7 @@ import {
   resetTrackPlayersRuntime,
   syncAllTrackOutputRuntime,
   syncTrackOutputRuntime,
+  whenTrackChainSettled,
 } from "./track-runtime.js";
 
 export class TrackAudio {
@@ -52,5 +53,11 @@ export class TrackAudio {
     ensureMasterOutputGain: (audioContext: AudioContext) => GainNode,
   ): GainNode | null {
     return ensureTrackOutputRuntime(trackId, ensureMasterOutputGain);
+  }
+
+  // Purpose: Run a callback once any pending effect-path swap of the track is wired.
+  // How: Delegate to the internal runtime ADT (at once when no swap is pending).
+  static whenChainSettled(trackId: TrackId, callback: () => void): void {
+    whenTrackChainSettled(trackId, callback);
   }
 }
