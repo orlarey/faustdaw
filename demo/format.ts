@@ -125,7 +125,12 @@ export function formatCurrentAbsoluteTimeLabel(
 
 /**
  * Purpose: Parse an absolute time label in HH:MM:SS.mmm[+ee] form into an internal time coordinate.
- * How: Validate the textual shape, decode each field, then convert the assembled signed seconds value and optional sample residue through the shared timebase.
+ * How: Validate the textual shape and decode each field. The label names the
+ *      first sample at or after its millisecond, plus `ee` samples: the exact
+ *      inverse of `decomposeAbsoluteTime` on the sample lattice. When a
+ *      millisecond is not a whole number of samples (44.1 kHz: 44.1 samples),
+ *      rounding to the nearest sample instead could land before the
+ *      millisecond and read back one millisecond (or one sample) lower.
  */
 export function parseAbsoluteTimeLabel(value: string, timebase: Timebase): number {
   const trimmed = value.trim();
@@ -145,5 +150,8 @@ export function parseAbsoluteTimeLabel(value: string, timebase: Timebase): numbe
     throw new Error("Invalid sample residue");
   }
   const totalMilliseconds = (((hours * 60 + minutes) * 60) + seconds) * 1000 + milliseconds;
-  return sign * (Math.round((totalMilliseconds / 1000) * timebase.internalTimeRate) + extraSamples * timebase.internalTimeFactor);
+  const sampleCoord = timebase.internalTimeFactor;
+  const millisecondCoord = timebase.internalTimeRate / 1000;
+  const firstSampleInMillisecond = Math.ceil((totalMilliseconds * millisecondCoord) / sampleCoord);
+  return sign * (firstSampleInMillisecond + extraSamples) * sampleCoord;
 }
