@@ -5,8 +5,12 @@
  *          only — no PCM copy, no new resource.
  * How: Applies when at least one selected clip intersects the cut coordinate.
  *      Execute walks the selection, replaces each intersected clip by two
- *      sliced halves via `removeClip` + `placeClipInstance`, and commits the
- *      result. Non-intersected clips pass through unchanged.
+ *      sliced halves (`splitClipAtCut`), and commits the result.
+ *      Non-intersected clips pass through unchanged.
+ *      The cut falls on the clip's nearest sample. The right half starts
+ *      where the left half ends: each sample stays at its timeline position,
+ *      and the halves stay contiguous (Merge, Crossfade). At 44.1 kHz a
+ *      sample spans 10 coordinates, so a cut is usually between two samples.
  *
  ******************************************************************************/
 import type { Selection } from "../../src/domain/selection/selection.js";
@@ -43,6 +47,52 @@ function computeCutOffsetSamples(project: Project, clip: Clip, cutCoord: TimeCoo
   return Math.round(scaled);
 }
 
+/**
+ * Purpose: Split one clip at `cutCoord` into two halves of the same resource.
+ * How: Cut at the clip's nearest sample; the right half starts at the left
+ *      half's end (not at `cutCoord`, which may lie between two samples), so
+ *      no sample moves and the halves are contiguous. Returns null when the
+ *      cut leaves an empty half.
+ */
+export function splitClipAtCut(
+  project: Project,
+  clip: Clip,
+  cutCoord: TimeCoord,
+  nextClipId: () => ClipId,
+): { project: Project; leftId: ClipId; rightId: ClipId } | null {
+  const cutOffsetSamples = computeCutOffsetSamples(project, clip, cutCoord);
+  const originalStart = getClipSourceStartSample(clip);
+  const originalLength = getClipSourceLengthSamples(clip);
+  if (cutOffsetSamples <= 0 || cutOffsetSamples >= originalLength) {
+    return null;
+  }
+
+  const trackId = getClipTrackId(project, clip.id);
+  const leftName = clip.name ? `${clip.name} L` : undefined;
+  const rightName = clip.name ? `${clip.name} R` : undefined;
+  const leftClip: Clip = {
+    id: nextClipId(),
+    resource: clip.resource,
+    start: clip.start,
+    sourceStartSample: originalStart,
+    sourceLengthSamples: cutOffsetSamples,
+    ...(leftName !== undefined ? { name: leftName } : {}),
+  };
+  const rightClip: Clip = {
+    id: nextClipId(),
+    resource: clip.resource,
+    start: clipEnd(project, leftClip),
+    sourceStartSample: originalStart + cutOffsetSamples,
+    sourceLengthSamples: originalLength - cutOffsetSamples,
+    ...(rightName !== undefined ? { name: rightName } : {}),
+  };
+
+  let next = removeClip(project, clip.id);
+  next = placeClipInstance(next, leftClip, leftClip.start, trackId);
+  next = placeClipInstance(next, rightClip, rightClip.start, trackId);
+  return { project: next, leftId: leftClip.id, rightId: rightClip.id };
+}
+
 class SplitOperation implements MenuOperation {
   readonly name = "Split";
   readonly shortcut = "s";
@@ -70,38 +120,13 @@ class SplitOperation implements MenuOperation {
             continue;
           }
 
-          const cutOffsetSamples = computeCutOffsetSamples(project, clip, cutCoord);
-          const originalStart = getClipSourceStartSample(clip);
-          const originalLength = getClipSourceLengthSamples(clip);
-          if (cutOffsetSamples <= 0 || cutOffsetSamples >= originalLength) {
+          const split = splitClipAtCut(project, clip, cutCoord, createNextClipId);
+          if (!split) {
             nextIds.push(clip.id);
             continue;
           }
-
-          const trackId = getClipTrackId(project, clip.id);
-          const leftName = clip.name ? `${clip.name} L` : undefined;
-          const rightName = clip.name ? `${clip.name} R` : undefined;
-          const leftClip: Clip = {
-            id: createNextClipId(),
-            resource: clip.resource,
-            start: clip.start,
-            sourceStartSample: originalStart,
-            sourceLengthSamples: cutOffsetSamples,
-            ...(leftName !== undefined ? { name: leftName } : {}),
-          };
-          const rightClip: Clip = {
-            id: createNextClipId(),
-            resource: clip.resource,
-            start: cutCoord,
-            sourceStartSample: originalStart + cutOffsetSamples,
-            sourceLengthSamples: originalLength - cutOffsetSamples,
-            ...(rightName !== undefined ? { name: rightName } : {}),
-          };
-
-          project = removeClip(project, clip.id);
-          project = placeClipInstance(project, leftClip, leftClip.start, trackId);
-          project = placeClipInstance(project, rightClip, rightClip.start, trackId);
-          nextIds.push(leftClip.id, rightClip.id);
+          project = split.project;
+          nextIds.push(split.leftId, split.rightId);
         }
 
         return SelectionNS.of(project, nextIds);
