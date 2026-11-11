@@ -39,6 +39,7 @@ import {
 import { registerOnsetEditorCloseHook } from "./onset-annotations.js";
 import type { Elements } from "./bind-elements.js";
 import { initMarkerManager, markerManager } from "./marker/marker-manager.js";
+import { decodeImportedAudioBytes } from "./imported-audio-decode.js";
 import { demoState, type ImportedResourceSource } from "./state.js";
 import { EDGE_SCROLL_ZONE_PX, RULER_PAN_COMMIT_THRESHOLD_PX } from "./gesture/gesture-state.js";
 import { wireRulerDragging } from "./gesture/ruler-gesture.js";
@@ -458,18 +459,6 @@ function isSessionRenderTransferDrag(dataTransfer: DataTransfer | null): boolean
  */
 function getAudioFileSignature(file: File): string {
   return `${file.name}::${file.size}::${file.lastModified}::${file.type}`;
-}
-
-function createImportedResourceSource(
-  file: File,
-  fileBytes: Uint8Array,
-): ImportedResourceSource {
-  return {
-    fileName: file.name,
-    mimeType: file.type,
-    lastModified: file.lastModified,
-    bytes: fileBytes,
-  };
 }
 
 function createGeneratedWavResourceSource(
@@ -1841,7 +1830,7 @@ async function decodeImportedAudioFile(
   resourceId: string,
   importedAudio: ImportedAudioPayload,
   reportStatus: ImportStatusReporter,
-): Promise<{ resource: AudioResource; buffer: AudioBuffer; sourceBytes: Uint8Array }> {
+): Promise<{ resource: AudioResource; buffer: AudioBuffer; source: ImportedResourceSource }> {
   const { file } = importedAudio;
   const audioContext = demoState.audio.ensureContext();
   if (!audioContext) {
@@ -1859,21 +1848,28 @@ async function decodeImportedAudioFile(
   }
   reportStatus(`Importing "${file.name}" (${formatByteSize(file.size)})...`);
   let decodedBuffer: AudioBuffer;
+  let source: ImportedResourceSource;
 
   try {
-    decodedBuffer = await audioContext.decodeAudioData(fileBytes.slice().buffer);
-  } catch (nativeDecodeError) {
-    pushRenderLog(`Native decode failed for "${file.name}", trying ffmpeg.wasm`);
-    reportStatus(`Converting "${file.name}" via ffmpeg.wasm...`);
-    try {
-      const transcodedWavBytes = await transcodeAudioFileToWavBytes(file, fileBytes);
-      decodedBuffer = await audioContext.decodeAudioData(transcodedWavBytes);
+    // A file only ffmpeg.wasm reads is kept as the transcoded WAV, which the
+    // session saves and decodes again on load (imported-audio-decode.ts).
+    const decoded = await decodeImportedAudioBytes(file, fileBytes, {
+      decode: (bytes) => audioContext.decodeAudioData(bytes),
+      transcodeToWav: (bytes) => transcodeAudioFileToWavBytes(file, bytes),
+      onFallback: () => {
+        pushRenderLog(`Native decode failed for "${file.name}", trying ffmpeg.wasm`);
+        reportStatus(`Converting "${file.name}" via ffmpeg.wasm...`);
+      },
+    });
+    decodedBuffer = decoded.buffer;
+    source = decoded.source;
+    if (decoded.transcoded) {
       pushRenderLog(`Import "${file.name}" via ffmpeg.wasm fallback`);
-    } catch (ffmpegDecodeError) {
-      throw new Error(
-        `Unable to decode "${file.name}" natively or via ffmpeg.wasm: ${normalizeErrorMessage(ffmpegDecodeError)}`,
-      );
     }
+  } catch (ffmpegDecodeError) {
+    throw new Error(
+      `Unable to decode "${file.name}" natively or via ffmpeg.wasm: ${normalizeErrorMessage(ffmpegDecodeError)}`,
+    );
   }
 
   ensureImportableDecodedSize(file.name, decodedBuffer);
@@ -1884,7 +1880,7 @@ async function decodeImportedAudioFile(
     channels: decodedBuffer.numberOfChannels,
     length: decodedBuffer.length,
   };
-  return { resource, buffer: decodedBuffer, sourceBytes: fileBytes };
+  return { resource, buffer: decodedBuffer, source };
 }
 
 /**
@@ -1918,10 +1914,7 @@ async function importAudioFile(
   const decodedImport = await decodeImportedAudioFile(resourceId, importedAudio, reportStatus);
   demoState.project = importAudioResource(demoState.project, decodedImport.resource);
   demoState.resources.audioBuffers.set(decodedImport.resource.id, decodedImport.buffer);
-  demoState.resources.sourceFiles.set(
-    decodedImport.resource.id,
-    createImportedResourceSource(file, decodedImport.sourceBytes),
-  );
+  demoState.resources.sourceFiles.set(decodedImport.resource.id, decodedImport.source);
   demoState.resources.retainedIds.add(decodedImport.resource.id);
   demoState.resources.importedBySignature.set(fileSignature, decodedImport.resource.id);
   reportStatus(`Building waveform for "${file.name}"...`);
