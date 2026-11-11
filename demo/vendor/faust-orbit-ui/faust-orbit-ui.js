@@ -61,6 +61,7 @@ export class FaustOrbitUI extends FaustUICore {
     controlOrder; // Stable order of controls used for angular placement fallback.
     paramValues; // Last known parameter values, indexed by path.
     pointer; // Current pointer drag session state.
+    detailDragActive = false; // True while a detail-panel slider drag brackets its own gesture.
     resizeObserver; // Resize observer bound to canvas container.
     rafId; // Pending requestAnimationFrame id for deferred drawing.
     lastStateEmitAt; // Timestamp of last emitted state notification.
@@ -1200,23 +1201,58 @@ export class FaustOrbitUI extends FaustUICore {
         }
     }
     // Applies a value from the detail panel back to the orbit and host.
+    // A typed value, an arrow-key step, a checkbox or a menu choice is one
+    // gesture, bracketed like a drag so hosts record it (undo, persistence).
+    // A button is a momentary trigger with no state to keep: not bracketed.
     _applyDetailValue(control, value) {
         const clamped = clamp(value, control.min, control.max);
         const p = this._positionFromValue(control.path, clamped);
         if (!p)
             return;
-        control.x = p.x;
-        control.y = p.y;
-        this.paramValues[control.path] = clamped;
-        try {
-            this.paramChangeByUI(control.path, clamped);
-        }
-        catch {
-            // ignore
-        }
+        const apply = () => {
+            control.x = p.x;
+            control.y = p.y;
+            this.paramValues[control.path] = clamped;
+            try {
+                this.paramChangeByUI(control.path, clamped);
+            }
+            catch {
+                // ignore
+            }
+        };
+        if (control.type === 'button')
+            apply();
+        else
+            this._asGesture(apply);
         this._requestRender();
         this._requestStateEmit();
         this._updateDetailPanel();
+    }
+    // Runs one discrete edit between onInteractionStart and onInteractionEnd,
+    // unless a canvas or slider drag already brackets it.
+    _asGesture(apply) {
+        const own = !this.pointer && !this.detailDragActive;
+        if (own && this.onInteractionStart) {
+            try {
+                this.onInteractionStart();
+            }
+            catch {
+                // ignore
+            }
+        }
+        try {
+            apply();
+        }
+        finally {
+            if (own && this.onInteractionEnd) {
+                try {
+                    this.onInteractionEnd();
+                }
+                catch {
+                    // ignore
+                }
+            }
+        }
     }
     // Rebuilds the detail panel DOM for the currently active control.
     _updateDetailPanel() {
@@ -1374,15 +1410,19 @@ export class FaustOrbitUI extends FaustUICore {
                 const p = this._positionFromValue(control.path, clamped);
                 if (!p)
                     return;
-                control.x = p.x;
-                control.y = p.y;
-                this.paramValues[control.path] = clamped;
-                try {
-                    this.paramChangeByUI(control.path, clamped);
-                }
-                catch {
-                    // ignore
-                }
+                // A drag is already bracketed (pointerdown / pointerup); a
+                // keyboard step on the focused slider is its own gesture.
+                this._asGesture(() => {
+                    control.x = p.x;
+                    control.y = p.y;
+                    this.paramValues[control.path] = clamped;
+                    try {
+                        this.paramChangeByUI(control.path, clamped);
+                    }
+                    catch {
+                        // ignore
+                    }
+                });
                 if (valueInput instanceof HTMLInputElement) {
                     valueInput.value = this._formatValue(clamped, control.step, control.unit);
                 }
@@ -1393,6 +1433,7 @@ export class FaustOrbitUI extends FaustUICore {
             // (and the OrbitUI wrapper's param-undo scope) treat the whole drag
             // as a single gesture instead of one commit per intermediate value.
             rangeInput.addEventListener('pointerdown', () => {
+                this.detailDragActive = true;
                 if (this.onInteractionStart) {
                     try {
                         this.onInteractionStart();
@@ -1400,6 +1441,9 @@ export class FaustOrbitUI extends FaustUICore {
                     catch { /* ignore */ }
                 }
                 const onUp = () => {
+                    if (!this.detailDragActive)
+                        return;
+                    this.detailDragActive = false;
                     if (this.onInteractionEnd) {
                         try {
                             this.onInteractionEnd();
