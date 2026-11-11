@@ -16,6 +16,13 @@ import { clampViewDuration, clampViewStart } from "./view-clamps.js";
 
 const PLAYBACK_FOLLOW_RATIO = 2 / 3;
 
+/** The visible window of a TimelineViewport (see snapshot / restore). */
+export type TimelineViewportSnapshot = {
+  readonly viewStartCoord: number;
+  readonly viewDurationCoord: number;
+  readonly zoomLevelIndex: number;
+};
+
 // ---------------------------------------------------------------------------
 // TimelineViewport class
 // ---------------------------------------------------------------------------
@@ -244,6 +251,35 @@ export class TimelineViewport {
         this.timeScale.toTimeCoord(viewStartSec),
       ),
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Snapshot
+  // -------------------------------------------------------------------------
+
+  // Purpose: Capture the visible window, e.g. when a gesture that Escape may
+  //          cancel starts.
+  // How: Copy the start, the duration and the zoom level.
+  snapshot(): TimelineViewportSnapshot {
+    return {
+      viewStartCoord: this.viewStartCoord,
+      viewDurationCoord: this.viewDurationCoord,
+      zoomLevelIndex: this.timeScale.zoomLevelIndex,
+    };
+  }
+
+  // Purpose: Put the visible window back exactly as a snapshot recorded it.
+  // How: Restore the zoom level, then the start and duration as they were
+  //      (no re-snap: they were valid for that level). Returns whether the
+  //      window changed.
+  restore(snapshot: TimelineViewportSnapshot): boolean {
+    const changed = snapshot.zoomLevelIndex !== this.timeScale.zoomLevelIndex
+      || snapshot.viewStartCoord !== this.viewStartCoord
+      || snapshot.viewDurationCoord !== this.viewDurationCoord;
+    this.timeScale.setZoomLevel(snapshot.zoomLevelIndex);
+    this.viewDurationCoord = snapshot.viewDurationCoord;
+    this.viewStartCoord = snapshot.viewStartCoord;
+    return changed;
   }
 
   // -------------------------------------------------------------------------

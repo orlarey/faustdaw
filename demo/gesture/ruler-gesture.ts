@@ -15,6 +15,8 @@
  *          as the finger stays down.
  *        - On release (or pointercancel), the view stops at once: the
  *          remaining preview offset is committed and the momentum loop ends.
+ *      Escape during a pan or zoom cancels it: the view goes back to where it
+ *      was at pointerdown, as Escape does for a clip drag.
  *      One callback is injected:
  *        - restartPlaybackSessionIfNeeded: re-syncs the audio clock after a
  *          shift-click seek moves the cursor.
@@ -28,6 +30,7 @@ import { snapCursorToNearestTertiaryDivision } from "../magnetism.js";
 import { recordPerfCounter } from "../perf.js";
 import { TimelineScene } from "../timeline/timeline-scene.js";
 import { View } from "../view/view.js";
+import type { TimelineViewportSnapshot } from "../view/timeline-viewport.js";
 import { commitTimelinePreviewOffset } from "../view/viewport-commit.js";
 import { pushRenderLog, render, renderFrame, renderGestureOverlayFrame } from "../daw-render/daw-render-runtime.js";
 
@@ -52,6 +55,8 @@ export function wireRulerDragging(elements: Elements): void {
   let rulerPanMouseVelocityPxPerMs = 0;
   let rulerPanFrameTimestampMs: number | null = null;
   let rulerPanDragging = false;
+  // The view at the gesture's pointerdown, put back if Escape cancels it.
+  let rulerGestureStartView: TimelineViewportSnapshot | null = null;
 
   function logPanFrameGap(rawDeltaMs: number): void {
     if (!demoState.devFlags.perfLogging || demoState.rulerDragState?.mode !== "pan" || rawDeltaMs < PAN_DEBUG_FRAME_GAP_THRESHOLD_MS) {
@@ -197,6 +202,7 @@ export function wireRulerDragging(elements: Elements): void {
       return;
     }
     stopRulerPanMotion();
+    rulerGestureStartView = demoState.viewport.snapshot();
     const gridRect = elements.timelineGrid.getBoundingClientRect();
     demoState.rulerDragState = {
       pointerId: event.pointerId,
@@ -279,6 +285,7 @@ export function wireRulerDragging(elements: Elements): void {
       ? commitRulerPanPreview(elements, true)
       : false;
     demoState.rulerDragState = null;
+    rulerGestureStartView = null;
     if (finalMode === "pan") {
       stopRulerPanMotion();
     }
@@ -299,6 +306,52 @@ export function wireRulerDragging(elements: Elements): void {
     }
   };
 
+  /**
+   * Purpose: Cancel the ruler gesture in progress (Escape).
+   * How: Stop the zoom frame and the pan momentum, drop the gesture state and
+   *      the pan preview offset, release the pointer capture, and put the
+   *      view back as it was at pointerdown. The rest of the press is then
+   *      ignored (pointermove / pointerup find no gesture).
+   */
+  const cancelRulerDrag = (): void => {
+    const rulerDragState = demoState.rulerDragState;
+    if (!rulerDragState) {
+      return;
+    }
+    if (rulerZoomFrameId !== null) {
+      cancelAnimationFrame(rulerZoomFrameId);
+      rulerZoomFrameId = null;
+    }
+    stopRulerPanMotion();
+    demoState.rulerDragState = null;
+    demoState.geometryWindow.keepWarm = false;
+    TimelineScene.setPanPreviewOffset(elements, 0);
+    if (elements.timelineRuler.hasPointerCapture(rulerDragState.pointerId)) {
+      elements.timelineRuler.releasePointerCapture(rulerDragState.pointerId);
+    }
+    if (rulerGestureStartView) {
+      demoState.viewport.restore(rulerGestureStartView);
+      rulerGestureStartView = null;
+    }
+    pushRenderLog("Ruler gesture cancelled");
+    renderFrame(elements);
+  };
+
   elements.timelineRuler.addEventListener("pointerup", endRulerDrag);
   elements.timelineRuler.addEventListener("pointercancel", endRulerDrag);
+  // Escape cancels a ruler pan or zoom in progress. Capture phase and
+  // stopImmediatePropagation, as for a clip drag: the key belongs to the
+  // gesture and does not also close a panel. Without a gesture it does nothing.
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape" || !demoState.rulerDragState) {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cancelRulerDrag();
+    },
+    { capture: true },
+  );
 }
