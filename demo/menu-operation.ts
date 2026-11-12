@@ -20,6 +20,7 @@ import { demoState } from "./state.js";
 import { applySessionDocumentTransition } from "./session-history.js";
 import { writeSelectionToDemoState } from "./selection-state.js";
 import { invalidateWaveformSlidingBuffers } from "./daw-render/daw-render-runtime.js";
+import { followClipFilter } from "./play-selection.js";
 
 /**
  * Purpose: Ambient context a menu operation may read during applies/execute.
@@ -74,6 +75,7 @@ export function commitSelectionTransition(
 ): Selection | null {
   demoState.clipRenderStable.dirty = true;
   invalidateWaveformSlidingBuffers();
+  const previousProject = demoState.project;
   let result: Selection | null = null;
   applySessionDocumentTransition(
     label,
@@ -84,6 +86,14 @@ export function commitSelectionTransition(
     },
     elements,
   );
+  if (result !== null) {
+    // A running Play Selection follows the clips that replaced its own.
+    demoState.playSelection.clipFilter = followClipFilter(
+      demoState.playSelection.clipFilter,
+      previousProject,
+      demoState.project,
+    );
+  }
   if (result !== null && options.restartPlayback) {
     demoState.playbackSession.restartIfNeeded();
   }

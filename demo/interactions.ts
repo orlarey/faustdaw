@@ -29,6 +29,7 @@ import { mergeOperation } from "./menu-operations/merge.js";
 import { crossfadeOperation } from "./menu-operations/crossfade.js";
 import { reverseOperation } from "./menu-operations/reverse.js";
 import { deleteOperation } from "./menu-operations/delete.js";
+import { followClipFilter } from "./play-selection.js";
 import { playSelectionOperation } from "./menu-operations/play.js";
 import { openSourceOperation } from "./menu-operations/open-source.js";
 import { openTransformPanelOperation } from "./menu-operations/open-transform-panel.js";
@@ -1322,6 +1323,8 @@ async function applyLoadedSessionArchive(
 
   stopClipAutoScroll();
   demoState.transportLoop.stop(elements);
+  demoState.playSelection.clipFilter = null;
+  demoState.playSelection.loopRange = null;
   await demoState.audio.releaseIfSampleRateChanged(archive.sessionDocument.sampleRate);
   const preservedViewState = options.preserveViewState
     ? captureSessionViewState(demoState.project)
@@ -1758,6 +1761,9 @@ function restoreSessionDocument(
   try {
     demoState.transportLoop.stop(elements);
     demoState.project = stop(demoState.project);
+    // Stopped like the Stop button: Play Selection ends with it.
+    demoState.playSelection.clipFilter = null;
+    demoState.playSelection.loopRange = null;
     // Project-level undo/redo (level 0) restores the project slice only: the
     // chain content (effects, parameters, Transform Chain) stays as it is now,
     // owned by the chain and effect scopes (UNDOREDOSPEC-WEBDAW).
@@ -2861,6 +2867,7 @@ export function wireEvents(elements: Elements): void {
 
   const explodeClipAtAnnotation = (clipId: string, annotation: ClipOnsetAnnotation): boolean => {
     const previousSessionDocument = createCurrentSessionDocument();
+    const projectBeforeExplode = demoState.project;
     try {
       const targetClip = getClip(demoState.project, clipId);
       const targetClipRef = getIndexedClip(demoState.project, clipId);
@@ -2910,6 +2917,11 @@ export function wireEvents(elements: Elements): void {
         elements,
       );
       if (changeCommitted) {
+        demoState.playSelection.clipFilter = followClipFilter(
+          demoState.playSelection.clipFilter,
+          projectBeforeExplode,
+          demoState.project,
+        );
         demoState.playbackSession.restartIfNeeded();
       }
       return changeCommitted;
