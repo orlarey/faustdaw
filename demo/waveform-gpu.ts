@@ -2,12 +2,14 @@
  *
  * Purpose: Render envelope waveforms from packed min/max texture data using a
  *          small WebGL2 pipeline.
- * How: Upload one float texture per resource × bucketSizeSamples, then draw one
+ * How: Upload one float texture per resource × bucketSizeSamples (uploaded
+ *      again when the resource's audio changes), then draw one
  *      quad per visible clip so the fragment shader turns each bucket texel
  *      into a vertical min/max segment.
  *
  ******************************************************************************/
 import type { WaveformTextureLevel } from "./waveform-view/waveform-types.js";
+import { resolveWaveformTexture, type WaveformTextureSlot } from "./waveform-texture-cache.js";
 
 export type GpuEnvelopeWaveformJob = {
   resourceId: string;
@@ -33,7 +35,8 @@ type WaveformGpuRenderer = {
   uBucketCount: WebGLUniformLocation;
   uColor: WebGLUniformLocation;
   uMinMaxTexture: WebGLUniformLocation;
-  textures: Map<string, WebGLTexture>;
+  /** One slot per resource id × bucket size; see waveform-texture-cache.ts. */
+  textures: Map<string, WaveformTextureSlot<WebGLTexture>>;
 };
 
 const VERTEX_SHADER_SOURCE = `#version 300 es
@@ -271,7 +274,7 @@ function ensureRendererCanvasSize(
 }
 
 function getTextureCacheKey(resourceId: string, textureLevel: WaveformTextureLevel): string {
-  return `${resourceId};${textureLevel.bucketSizeSamples};${textureLevel.bucketCount}`;
+  return `${resourceId};${textureLevel.bucketSizeSamples}`;
 }
 
 function ensureWaveformTexture(
@@ -279,34 +282,28 @@ function ensureWaveformTexture(
   resourceId: string,
   textureLevel: WaveformTextureLevel,
 ): WebGLTexture | null {
-  const cacheKey = getTextureCacheKey(resourceId, textureLevel);
-  const cachedTexture = renderer.textures.get(cacheKey) ?? null;
-  if (cachedTexture) {
-    return cachedTexture;
-  }
-  const texture = renderer.gl.createTexture();
-  if (!texture) {
-    return null;
-  }
-  renderer.gl.bindTexture(renderer.gl.TEXTURE_2D, texture);
-  renderer.gl.texParameteri(renderer.gl.TEXTURE_2D, renderer.gl.TEXTURE_MIN_FILTER, renderer.gl.NEAREST);
-  renderer.gl.texParameteri(renderer.gl.TEXTURE_2D, renderer.gl.TEXTURE_MAG_FILTER, renderer.gl.NEAREST);
-  renderer.gl.texParameteri(renderer.gl.TEXTURE_2D, renderer.gl.TEXTURE_WRAP_S, renderer.gl.CLAMP_TO_EDGE);
-  renderer.gl.texParameteri(renderer.gl.TEXTURE_2D, renderer.gl.TEXTURE_WRAP_T, renderer.gl.CLAMP_TO_EDGE);
-  renderer.gl.texImage2D(
-    renderer.gl.TEXTURE_2D,
-    0,
-    renderer.gl.RG32F,
-    textureLevel.bucketCount,
-    1,
-    0,
-    renderer.gl.RG,
-    renderer.gl.FLOAT,
-    textureLevel.packedMinMax,
-  );
-  renderer.gl.bindTexture(renderer.gl.TEXTURE_2D, null);
-  renderer.textures.set(cacheKey, texture);
-  return texture;
+  const { gl } = renderer;
+  return resolveWaveformTexture(renderer.textures, getTextureCacheKey(resourceId, textureLevel), textureLevel.packedMinMax, {
+    create: () => {
+      const texture = gl.createTexture();
+      if (!texture) {
+        return null;
+      }
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      return texture;
+    },
+    upload: (texture, packedMinMax) => {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      // One RG texel (min, max) per bucket.
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, packedMinMax.length / 2, 1, 0, gl.RG, gl.FLOAT, packedMinMax);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    },
+  });
 }
 
 /**
